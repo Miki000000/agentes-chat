@@ -29546,6 +29546,9 @@
   "worksOn.locked": {
     "value": "Follows {{name}}"
   },
+  "worksOn.lockedUnknown": {
+    "value": "Follows another agent's computer"
+  },
   "worksOn.stop": {
     "value": "Stop working on {{name}}'s computer"
   },
@@ -29559,7 +29562,7 @@
     "value": "and {{count}} more"
   },
   "worksOn.noneEligible": {
-    "value": "No agent of yours has a computer to share."
+    "value": "No other agent with the same owner has a computer to share."
   },
   "worksOn.unavailable": {
     "value": "{{name}} can't share its computer now: it is archived, has another owner or moved. Choose another or stop."

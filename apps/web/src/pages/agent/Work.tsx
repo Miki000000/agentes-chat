@@ -657,7 +657,7 @@ function ComputerForm({ onClose }: { onClose: () => void }) {
         <DialogBody>
           {followed !== undefined && (
             <SettingNote icon="lock">
-              {followed ? t("worksOn.locked", { name: followed }) : t("worksOn.none")}
+              {followed ? t("worksOn.locked", { name: followed }) : t("worksOn.lockedUnknown")}
             </SettingNote>
           )}
           <OptionList

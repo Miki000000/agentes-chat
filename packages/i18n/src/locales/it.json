@@ -12574,11 +12574,12 @@
     "hint": "Usa il computer di quell'agente come lo usa lui lì. In tutto il resto resta un agente a sé.",
     "none": "Il proprio computer",
     "locked": "Segue {{name}}",
+    "lockedUnknown": "Segue il computer di un altro agente",
     "stop": "Smetti di lavorare sul computer di {{name}}",
     "crewTitle": "Lavorano su questo computer",
     "crewEmpty": "Nessun altro agente lavora su questo computer.",
     "crewMore": "e altri {{count}}",
-    "noneEligible": "Nessuno dei tuoi agenti ha un computer da condividere.",
+    "noneEligible": "Nessun altro agente con lo stesso proprietario ha un computer da condividere.",
     "unavailable": "{{name}} non può condividere il computer ora: archiviato, altro proprietario o spostato. Scegline un altro o smetti.",
     "tradeoff": "Su quel computer può fare ciò che fa quell'agente: usare i suoi file, i suoi accessi e i programmi che esegue. Anche il suo accesso IA resta disponibile sull'utente di quel computer. Memoria e nome restano suoi, e le approvazioni per le azioni sensibili vanno sempre alle persone."
   },

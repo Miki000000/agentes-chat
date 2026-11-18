@@ -28,3 +28,14 @@ describe("the field's words", () => {
     });
   }
 });
+
+describe("the lock line and the empty state", () => {
+  test("a linked agent whose lead is unknown reads a line with no name; the empty state is about the owner", () => {
+    for (const { code } of LOCALES) {
+      const text = at(STRINGS[code]);
+      expect(text.get("worksOn.lockedUnknown")).toBeTruthy();
+      expect(text.get("worksOn.lockedUnknown")).not.toContain("{{name}}");
+    }
+    expect(at(en).get("worksOn.noneEligible")).toBe("No other agent with the same owner has a computer to share.");
+  });
+});

@@ -12157,11 +12157,12 @@
     "hint": "Gebruikt de computer van die agent zoals die agent dat daar doet. Overal elders blijft het zijn eigen agent.",
     "none": "Eigen computer",
     "locked": "Volgt {{name}}",
+    "lockedUnknown": "Volgt de computer van een andere agent",
     "stop": "Stop met werken op de computer van {{name}}",
     "crewTitle": "Werken op deze computer",
     "crewEmpty": "Geen andere agent werkt op deze computer.",
     "crewMore": "en {{count}} meer",
-    "noneEligible": "Geen van je agenten heeft een computer om te delen.",
+    "noneEligible": "Geen andere agent met dezelfde eigenaar heeft een computer om te delen.",
     "unavailable": "{{name}} kan de computer nu niet delen: gearchiveerd, andere eigenaar of verhuisd. Kies een andere of stop.",
     "tradeoff": "Op die computer kan hij doen wat die agent kan: de bestanden, de inlogs en de programma's gebruiken die die agent draait. Zijn eigen AI-inlog blijft ook beschikbaar op de gebruiker van die computer. Geheugen en naam blijven van hemzelf, en goedkeuringen voor gevoelige acties gaan nog steeds naar mensen."
   },

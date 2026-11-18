@@ -226,7 +226,7 @@ export function AgentComputerScreen({ agentId }: { agentId: string }) {
       <Gap />
       {pick.follows && (
         <GroupedFooter>
-          {pick.follows.name ? t("worksOn.locked", { name: pick.follows.name }) : t("worksOn.none")}
+          {pick.follows.name ? t("worksOn.locked", { name: pick.follows.name }) : t("worksOn.lockedUnknown")}
         </GroupedFooter>
       )}
       <GroupedList>

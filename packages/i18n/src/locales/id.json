@@ -11644,11 +11644,12 @@
     "hint": "Memakai komputer agen itu seperti yang ia lakukan di sana. Di semua hal lain ia tetap agennya sendiri.",
     "none": "Komputernya sendiri",
     "locked": "Mengikuti {{name}}",
+    "lockedUnknown": "Mengikuti komputer agen lain",
     "stop": "Berhenti bekerja di komputer {{name}}",
     "crewTitle": "Bekerja di komputer ini",
     "crewEmpty": "Tidak ada agen lain yang bekerja di komputer ini.",
     "crewMore": "dan {{count}} lagi",
-    "noneEligible": "Tidak ada agen Anda yang punya komputer untuk dibagikan.",
+    "noneEligible": "Tidak ada agen lain dengan pemilik yang sama yang punya komputer untuk dibagikan.",
     "unavailable": "{{name}} tidak bisa membagikan komputernya sekarang: diarsipkan, pemiliknya lain, atau pindah. Pilih yang lain atau berhenti.",
     "tradeoff": "Di komputer itu ia bisa melakukan apa yang bisa dilakukan agen tersebut: memakai file, login, dan program yang dijalankannya. Login AI miliknya sendiri juga tetap tersedia di pengguna komputer itu. Memori dan namanya tetap miliknya, dan persetujuan untuk tindakan sensitif tetap diserahkan kepada orang."
   },

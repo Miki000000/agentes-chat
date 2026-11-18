@@ -450,7 +450,12 @@ function AgentComputerRow({
         <span className="computers-agent__value computers-agent__value--ro">
           {iconOf(value)}
           {nameOf(value)}
-          {followed !== null && <span className="small muted"> · {t("worksOn.locked", { name: followed })}</span>}
+          {followed !== null && (
+            <span className="small muted">
+              {" "}
+              · {followed ? t("worksOn.locked", { name: followed }) : t("worksOn.lockedUnknown")}
+            </span>
+          )}
         </span>
       )}
     </div>
