@@ -711,21 +711,25 @@ export async function buildRunContext(
   const briefing = threadInfo?.missionId ? missionBrief(db, threadInfo.missionId).catch(() => null) : null;
   // Its connected computer's folders (ADR 0036 §8): the absolute paths it may use there, when the machine reports them.
   // Working on another agent's computer (ADR 0202): whose it is and who else works there, told to the agent.
-  const worksOn = agent.worksOnAgentId
-    ? Promise.all([getAgentCached(db, run.orgId, agent.worksOnAgentId), membersOf(db, run.orgId, agent.worksOnAgentId)])
-        .then(([lead, members]) =>
-          lead
-            ? {
-                name: lead.name,
-                handle: lead.handle,
-                others: members.filter((m) => m.id !== agent.id).map((m) => m.name),
-              }
-            : null,
-        )
-        .catch(() => null)
-    : null;
+  const worksOn =
+    agent.worksOnAgentId && agent.machineId
+      ? Promise.all([
+          getAgentCached(db, run.orgId, agent.worksOnAgentId),
+          membersOf(db, run.orgId, agent.worksOnAgentId),
+        ])
+          .then(([lead, members]) =>
+            lead && !lead.archivedAt && lead.machineId === agent.machineId && lead.ownerUserId === agent.ownerUserId
+              ? {
+                  name: lead.name,
+                  handle: lead.handle,
+                  others: members.filter((m) => m.id !== agent.id).map((m) => m.name),
+                }
+              : null,
+          )
+          .catch(() => null)
+      : null;
   const machineAccess = agent.machineId
-    ? machineAccessOf(db, run.orgId, agent.id, agent.machineId).catch(() => null)
+    ? machineAccessOf(db, run.orgId, agent.worksOnAgentId ?? agent.id, agent.machineId).catch(() => null)
     : null;
   // The secrets people already gave it (names only), so it uses them instead of asking again. In a mission's
   // thread its tools act on the mission's computer (ADR 0029): that one's secrets, none when it has no computer.

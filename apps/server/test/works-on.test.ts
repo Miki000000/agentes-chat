@@ -31,7 +31,7 @@ type Listed = {
   id: string;
   machineId?: string | null;
   worksOnAgentId?: string | null;
-  worksOn?: { id: string; name: string; handle: string } | null;
+  worksOn?: { id: string; name: string; handle: string; archived: boolean } | null;
   crew?: { id: string; name: string; handle: string }[];
 };
 
@@ -65,7 +65,7 @@ test("sets and clears it: 200 with the lead's id, agents list says who works on 
   const member = rows.find((a) => a.id === dev);
   const lead = rows.find((a) => a.id === nina);
   expect(member?.worksOnAgentId).toBe(nina);
-  expect(member?.worksOn).toMatchObject({ id: nina, name: "Nina", handle: "nina" });
+  expect(member?.worksOn).toMatchObject({ id: nina, name: "Nina", handle: "nina", archived: false });
   const machineOf = async (agentId: string) =>
     (
       (await (await api(owner, "/machines")).json()) as { machines: { id: string; agents: { id: string }[] }[] }
@@ -163,5 +163,5 @@ test("the computers list shows who works there under the lead", async () => {
   };
   const agents = list.machines[0]?.agents ?? [];
   expect(agents.map((a) => a.id).sort()).toEqual([dev, nina].sort());
-  expect(agents.find((a) => a.id === dev)?.worksOnAgentId).toBe(nina);
+  expect(agents.find((a) => a.id === dev)).not.toHaveProperty("worksOnAgentId");
 });

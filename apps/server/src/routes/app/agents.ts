@@ -80,7 +80,7 @@ import {
   usageQueue,
   usageSummary,
   useTeamTemplate,
-  worksOnViews,
+  worksOnViewsOf,
 } from "@agenteschat/engine";
 import { contextWindowOf, nanoUsdToUsd, pricesAt, usdToNanoUsd } from "@agenteschat/providers";
 import { learnedPlanModels } from "@agenteschat/providers/plans";
@@ -677,7 +677,7 @@ export function agentRoutes(deps: AppDeps) {
         const b = budgets.get(id);
         return b ? budgetPercent(b.spentNanoUsd, b.budgetNanoUsd) : 0;
       };
-      const crews = worksOnViews(list);
+      const crews = await worksOnViewsOf(db, orgId);
       return c.json(
         {
           agents: list.map((a) => ({

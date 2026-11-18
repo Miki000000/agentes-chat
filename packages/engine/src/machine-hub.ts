@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import type { AgentScope } from "@agenteschat/adapters";
 import {
   ACCOUNTS_PROTOCOL,
   BROWSER_PROTOCOL,
@@ -98,7 +99,7 @@ import {
 import { enqueue } from "./outbox";
 import { isRightHand } from "./right-hand";
 import { assertCanWork, standingRefusal } from "./standing";
-import { assertCanWorkFor } from "./works-on";
+import { assertCanWorkFor, registerMembersHub } from "./works-on";
 
 const { machines, machineRpc, machineMcpCalls } = schema;
 
@@ -619,7 +620,10 @@ export function createMachineHub(deps: MachineHubDeps) {
     (conn: MachineConnection): LocalTaskStarter =>
     (input) => {
       const call: TaskCall = async (_machineId, request) => {
-        if (conn.orgId) await assertCanWork(db, conn.orgId, input.agent.id);
+        if (conn.orgId) {
+          await assertCanWork(db, conn.orgId, input.agent.id);
+          await assertCanWorkFor(db, conn.orgId, (request as { agent?: AgentScope }).agent);
+        }
         return callLocal(conn, await outgoing(conn.orgId, request));
       };
       return startMachineTask({ db, pubsub, call }, input);
@@ -1191,6 +1195,11 @@ export function createMachineHub(deps: MachineHubDeps) {
       // Its socket closed while the caller awaited (`hub.call`'s checks): `closeConn` already failed what it had,
       // and this would never be sent or answered. Never sent, so offline: `callWhenBack` may send it again.
       if (conn.closed) return reject(new MachineOfflineError(conn.name, conn.kind));
+      // The member field is the server's alone (ADR 0202): no path puts it on the wire.
+      if (request.agent && "member" in request.agent) {
+        const { member: _member, ...wire } = request.agent;
+        request = { ...request, agent: wire };
+      }
       if (request.op === "desktop.session.stop" && request.agent && conn.machineId) {
         browserHooks.desktopStopped?.(conn.machineId, request.agent.id);
       }
@@ -1754,6 +1763,7 @@ export function createMachineHub(deps: MachineHubDeps) {
       clearTimeout(timer);
     },
   };
+  registerMembersHub(hub);
   return hub;
 }
 

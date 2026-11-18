@@ -1,7 +1,7 @@
 import type { AgentScope, PubSub } from "@agenteschat/adapters";
 import { and, type Database, eq, isNull, ne, schema, sql } from "@agenteschat/db";
 import { forgetAgentCaches, getAgent, getAgentCached } from "./agents";
-import { ownsOrManagesAgent } from "./audience";
+import { managesAgent } from "./audience";
 import { recordAudit } from "./audit";
 import { ForbiddenError, NotFoundError, ValidationError } from "./errors";
 import { publishAgentsChanged, publishOrgEvent } from "./events";
@@ -115,18 +115,18 @@ export async function assertCanWorkFor(
 ) {
   try {
     await assertCanWork(db, orgId, scope?.id);
-    // The member's own hold too: it is held by its own id, which the scope no longer carries.
-    if (scope?.member) await assertCanWork(db, orgId, scope.member);
   } catch (error) {
     if (error instanceof AgentHeldError && scope?.member) {
       const lead = await getAgentCached(db, orgId, scope.id).catch(() => null);
-      throw new ForbiddenError(
-        `${lead?.name ?? "The agent whose computer this is"} is paused, so ${scope.name ?? "this agent"} can't work on its computer now.`,
-        "agent.paused",
-      );
+      // Same class, so a job still fails at once and a stream still closes as held; only the words name the lead.
+      const named = new AgentHeldError();
+      named.message = `${lead?.name ?? "The agent whose computer this is"} is paused, so ${scope.name ?? "this agent"} can't work on its computer now.`;
+      throw named;
     }
     throw error;
   }
+  // The member's own hold: it is held by its own id, which the scope no longer carries.
+  if (scope?.member) await assertCanWork(db, orgId, scope.member);
 }
 
 /**
@@ -149,9 +149,8 @@ export async function setWorksOn(
   if (!member || member.archivedAt) throw new NotFoundError("Agent not found");
   const lead = leadId ? await getAgent(db, orgId, leadId) : null;
   if (leadId && !lead) throw new NotFoundError("Agent not found");
-  if (!ownsOrManagesAgent(member, actorId, membership))
-    throw new ForbiddenError("Only who manages the agent changes it");
-  if (lead && !ownsOrManagesAgent(lead, actorId, membership)) {
+  if (!managesAgent(member, actorId, membership)) throw new ForbiddenError("Only who manages the agent changes it");
+  if (lead && !managesAgent(lead, actorId, membership)) {
     throw new ForbiddenError("Only who manages both agents sets this", WORKS_ON_CODE);
   }
   const machines = await import("./machines");
@@ -171,7 +170,8 @@ export async function setWorksOn(
     const [theLead] = await tx
       .select()
       .from(agents)
-      .where(and(eq(agents.orgId, orgId), eq(agents.id, leadId)));
+      .where(and(eq(agents.orgId, orgId), eq(agents.id, leadId)))
+      .for("update");
     if (!theLead) throw new NotFoundError("Agent not found");
     const bad = (message: string) => new ValidationError(message, WORKS_ON_CODE);
     if (leadId === agentId) throw bad(`${fresh.name} can't work on its own computer's behalf: choose another agent.`);
@@ -245,6 +245,13 @@ export async function setWorksOn(
  * The lead is archived or deleted: its members' work on its computer stops with it (their tasks run under its OS
  * user), through the computer where there is one. The link itself stays for an archive and is cleared by a deletion.
  */
+type MembersHub = { call: (machineId: string, request: never, options?: { timeoutMs?: number }) => Promise<unknown> };
+let registeredHub: MembersHub | null = null;
+/** The machine hub of this process, so a lead archived from any caller stops its members' work on the computer. */
+export function registerMembersHub(hub: MembersHub | null) {
+  registeredHub = hub;
+}
+
 export async function stopMembersWork(
   deps: {
     db: Database;
@@ -260,7 +267,7 @@ export async function stopMembersWork(
     .where(and(eq(agents.orgId, orgId), eq(agents.worksOnAgentId, leadId), ne(agents.id, leadId)));
   if (members.length === 0) return;
   const { cancelOrgTasks } = await import("./machine-tasks");
-  const hub = deps.hub;
+  const hub = deps.hub ?? registeredHub;
   const call = hub
     ? (((machineId: string, request: never) => hub.call(machineId, request, { timeoutMs: 15_000 })) as never)
     : undefined;
@@ -274,17 +281,43 @@ export async function stopMembersWork(
  */
 export function worksOnViews(
   list: readonly Pick<Row, "id" | "name" | "handle" | "worksOnAgentId" | "archivedAt">[],
-): Map<
-  string,
-  { worksOn: { id: string; name: string; handle: string } | null; crew: { id: string; name: string; handle: string }[] }
-> {
+): Map<string, { worksOn: BriefAgent | null; crew: BriefAgent[] }> {
   const byId = new Map(list.map((a) => [a.id, a]));
-  const brief = (a: { id: string; name: string; handle: string }) => ({ id: a.id, name: a.name, handle: a.handle });
+  const brief = (a: Pick<Row, "id" | "name" | "handle" | "archivedAt">): BriefAgent => ({
+    id: a.id,
+    name: a.name,
+    handle: a.handle,
+    archived: a.archivedAt !== null,
+  });
   return new Map(
     list.map((a) => {
       const lead = a.worksOnAgentId ? byId.get(a.worksOnAgentId) : undefined;
-      const crew = list.filter((m) => m.worksOnAgentId === a.id && !m.archivedAt).map(brief);
-      return [a.id, { worksOn: lead ? brief(lead) : null, crew }];
+      return [
+        a.id,
+        { worksOn: lead ? brief(lead) : null, crew: list.filter((m) => m.worksOnAgentId === a.id).map(brief) },
+      ];
     }),
   );
+}
+
+interface BriefAgent {
+  id: string;
+  name: string;
+  handle: string;
+  archived: boolean;
+}
+
+/** `worksOnViews` over every agent of the workspace that is not deleted, archived ones included (the list omits them). */
+export async function worksOnViewsOf(db: Database, orgId: string) {
+  const rows = await db
+    .select({
+      id: agents.id,
+      name: agents.name,
+      handle: agents.handle,
+      worksOnAgentId: agents.worksOnAgentId,
+      archivedAt: agents.archivedAt,
+    })
+    .from(agents)
+    .where(and(eq(agents.orgId, orgId), isNull(agents.deletedAt)));
+  return worksOnViews(rows);
 }

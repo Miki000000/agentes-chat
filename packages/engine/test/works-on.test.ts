@@ -381,13 +381,15 @@ describe("setting it (P1, P2, P3)", () => {
     expect((await row(mine2.id)).worksOnAgentId).toBeNull();
     // The computer rule: an agent bob manages on a computer he did not pair, led by one of his own there.
     await setAgentComputerTarget(deps(), f.owner.id, f.org.id, mine.id, adminBox.machineId);
-    expect(await refusal(setWorksOn(deps(), bob.id, f.org.id, mine2.id, mine.id))).toBeInstanceOf(ForbiddenError);
     await setAgentComputerTarget(deps(), f.owner.id, f.org.id, mine.id, mineBox.machineId);
-    // The control (assumed: the setter's owner path, a plain member with no manage_agents key, may link his own two).
-    await setWorksOn(deps(), bob.id, f.org.id, mine2.id, mine.id);
+    // A plain owner without manage_agents is refused (the line's precedent, ADR 0148): both agents need managesAgent.
+    expect(await refusal(setWorksOn(deps(), bob.id, f.org.id, mine2.id, mine.id))).toBeInstanceOf(ForbiddenError);
+    // The control: an admin who manages both, on a computer the setter's rule lets them use.
+    await setWorksOn(deps(), f.owner.id, f.org.id, mine2.id, mine.id);
     expect((await row(mine2.id)).worksOnAgentId).toBe(mine.id);
-    // Unlinking needs only managing the member.
-    await setWorksOn(deps(), bob.id, f.org.id, mine2.id, null);
+    // Unlinking needs managing the member too.
+    expect(await refusal(setWorksOn(deps(), bob.id, f.org.id, mine2.id, null))).toBeInstanceOf(ForbiddenError);
+    await setWorksOn(deps(), f.owner.id, f.org.id, mine2.id, null);
     expect((await row(mine2.id)).worksOnAgentId).toBeNull();
   });
 });
@@ -951,6 +953,19 @@ describe("standing and lifecycle (T9)", () => {
       runner.sent.filter((x) => x.type === "request").every((x) => x.type !== "request" || x.agent?.id !== member.id),
     ).toBe(true);
   });
+
+  test("archiving the lead through archiveAgent with no hub argument still stops the member's task on the computer", async () => {
+    const { box, lead, member } = await crew();
+    await grantScopes(f.db, f.org.id, member.id, SANDBOX);
+    const runner = taskRunner(box.token);
+    await runner.hello();
+    await link(member.id, lead.id);
+    const id = await task(box.machineId, member, lead.id);
+    await archiveAgent(f.db, f.owner.id, f.org.id, lead.id, f.pubsub);
+    const cancels = runner.sent.flatMap((x) => (x.type === "request" && x.op === "task.cancel" ? [x] : []));
+    expect(cancels.map((c) => c.taskId)).toEqual([id]);
+    expect(cancels[0]?.agent?.id).toBe(lead.id);
+  });
 });
 
 describe("the rest of the class (F10-F16)", () => {
@@ -1104,6 +1119,75 @@ describe("the rest of the class (F10-F16)", () => {
         .system,
     );
     expect(plain).not.toContain("works on");
+  });
+});
+
+describe("fixes of the first review round", () => {
+  test("a member's brain turn is resolved against the turn's own computer: another computer, or none, is refused", async () => {
+    const { box, lead, member } = await crew();
+    await link(member.id, lead.id);
+    const other = await pair("Other box");
+    const turn = (machineId?: string) =>
+      ({
+        orgId: f.org.id,
+        agentId: member.id,
+        ...(machineId ? { session: { id: crypto.randomUUID(), resume: false, machineId, cwd: "" } } : {}),
+      }) as never;
+    const scopeFor = agentScopeFromDb(f.db);
+    expect((await scopeFor(turn(box.machineId))).id).toBe(lead.id);
+    expect((await refusal(scopeFor(turn(other.machineId)))).message).toContain("Ada");
+    await f.db.update(schema.agents).set({ machineId: null }).where(eq(schema.agents.id, lead.id));
+    await f.db.update(schema.agents).set({ machineId: null }).where(eq(schema.agents.id, member.id));
+    expect(await refusal(scopeFor(turn()))).toBeInstanceOf(Error);
+  });
+
+  test("a held lead refuses the member with the held class, naming the lead; the wire never carries the member field", async () => {
+    const { box, lead, member } = await crew();
+    await link(member.id, lead.id);
+    await setAgentHold(f.db, f.org.id, lead.id, { held: true, reason: "operator" }, f.pubsub);
+    const e = await refusal(engine.assertCanWorkFor(f.db, f.org.id, await scopeOf(member.id, box.machineId)));
+    expect(e).toBeInstanceOf(engine.AgentHeldError);
+    expect(e.message).toContain("Ada");
+    expect((e as { retryable?: boolean }).retryable).toBe(false);
+    await setAgentHold(f.db, f.org.id, lead.id, { held: false, reason: null }, f.pubsub);
+    await setAgentHold(f.db, f.org.id, member.id, { held: true, reason: "operator" }, f.pubsub);
+    expect(
+      await refusal(engine.assertCanWorkFor(f.db, f.org.id, await scopeOf(member.id, box.machineId))),
+    ).toBeInstanceOf(engine.AgentHeldError);
+  });
+
+  test("the lead's move tells each follower's apps its new computer", async () => {
+    const { lead, member } = await crew();
+    await link(member.id, lead.id);
+    const newer = await pair("New box");
+    const events: { event?: { type?: string; agentId?: string } }[] = [];
+    f.pubsub.subscribe(`org:${f.org.id}`, (e) => events.push(e as never));
+    await setAgentComputerTarget(deps(), f.owner.id, f.org.id, lead.id, newer.machineId);
+    const told = events.filter((e) => e.event?.type === "agent.computer").map((e) => e.event?.agentId);
+    expect(told).toEqual(expect.arrayContaining([lead.id, member.id]));
+  });
+
+  test("an archived lead: no 'Where you work' block, and the list still names it and the archived member", async () => {
+    const { lead, member } = await crew();
+    await link(member.id, lead.id);
+    const t = await toolsFor(member, "");
+    const [agent] = await f.db.select().from(schema.agents).where(eq(schema.agents.id, member.id));
+    const [run] = await f.db.select().from(schema.agentRuns).where(eq(schema.agentRuns.id, t.run.id));
+    const text = async () =>
+      systemText(
+        (await buildRunContext(f.db, run as AgentRun, agent as never, { maxMessages: 30, toolsAvailable: true }))
+          .system,
+      );
+    expect(await text()).toContain("# Where you work");
+    await archiveAgent(f.db, f.owner.id, f.org.id, lead.id, f.pubsub);
+    expect(await text()).not.toContain("# Where you work");
+    const views = await engine.worksOnViewsOf(f.db, f.org.id);
+    expect(views.get(member.id)?.worksOn).toMatchObject({ id: lead.id, archived: true });
+    await archiveAgent(f.db, f.owner.id, f.org.id, member.id, f.pubsub);
+    expect(views.get(lead.id)).toBeDefined();
+    expect((await engine.worksOnViewsOf(f.db, f.org.id)).get(lead.id)?.crew).toMatchObject([
+      { id: member.id, archived: true },
+    ]);
   });
 });
 

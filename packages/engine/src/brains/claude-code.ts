@@ -144,7 +144,12 @@ export const agentScopeFromDb =
   async (turn: BrainTurn): Promise<AgentScope> => {
     const agent = await getAgentCached(db, turn.orgId, turn.agentId);
     // Working on another agent's computer (ADR 0202): its turn runs as that agent there; its session ids stay its own.
-    if (agent?.worksOnAgentId && agent.machineId) return worksOnScope(db, agent, agent.machineId);
+    if (agent?.worksOnAgentId) {
+      // The turn's own computer (a mission's or a spill-over's): refused unless it is the lead's.
+      const machineId = turn.session?.machineId ?? agent.machineId;
+      if (!machineId) throw new Error(`${agent.name} works on another agent's computer but has none now.`);
+      return worksOnScope(db, agent, machineId);
+    }
     return { id: turn.agentId, handle: agent?.handle ?? "agent", ...(agent ? { name: agent.name } : {}) };
   };
 

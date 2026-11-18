@@ -7,6 +7,7 @@ import type {
   RunnerHolds,
 } from "@agenteschat/adapters";
 import { and, type Database, desc, eq, gt, inArray, isNotNull, isNull, lte, type SQL, schema } from "@agenteschat/db";
+import { getAgentCached } from "./agents";
 import { recordAudit } from "./audit";
 import { publishOrgEvent } from "./events";
 import { agentScopeOn } from "./works-on";
@@ -68,8 +69,17 @@ type Call = <Op extends "keep.start" | "keep.end">(
 
 /** The hold's agent as requests name it: the computer finds its user by the id, and names a new one after it. */
 async function agentOf(db: Database, row: Pick<HoldRow, "orgId" | "agentId" | "machineId">) {
-  // An agent working on another's computer holds there as that agent (ADR 0202).
-  return agentScopeOn(db, row.orgId, row.agentId, row.machineId);
+  // An agent working on another's computer holds there as that agent (ADR 0202). Ending a hold must reach the
+  // computer even when the link is no longer honored (lead archived, moved): then the lead's id from the link is used.
+  try {
+    return await agentScopeOn(db, row.orgId, row.agentId, row.machineId);
+  } catch {
+    const own = await getAgentCached(db, row.orgId, row.agentId).catch(() => null);
+    const lead = own?.worksOnAgentId ? await getAgentCached(db, row.orgId, own.worksOnAgentId).catch(() => null) : null;
+    return lead
+      ? { id: lead.id, handle: lead.handle, ...(own?.name ? { name: own.name } : {}) }
+      : { id: row.agentId, handle: own?.handle ?? "agent", ...(own?.name ? { name: own.name } : {}) };
+  }
 }
 
 /** The apps that show the agent's computer read its holds again (only ids go out). */

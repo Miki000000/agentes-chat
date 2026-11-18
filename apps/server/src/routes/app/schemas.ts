@@ -622,9 +622,13 @@ export const Agent = z
       description:
         "Works on the computer of (ADR 0202): the agent whose computer, folder and sign-ins it uses there; null = its own environment.",
     }),
-    worksOn: z.object({ id: z.uuid(), name: z.string(), handle: z.string() }).nullable().optional().openapi({
-      description: "The agent it works on, in the list only.",
-    }),
+    worksOn: z
+      .object({ id: z.uuid(), name: z.string(), handle: z.string(), archived: z.boolean() })
+      .nullable()
+      .optional()
+      .openapi({
+        description: "The agent it works on, in the list only.",
+      }),
     crew: z
       .array(z.object({ id: z.uuid(), name: z.string(), handle: z.string() }))
       .optional()

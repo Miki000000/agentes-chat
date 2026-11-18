@@ -509,7 +509,6 @@ async function machineViews(db: Database, actorId: string, orgId: string, only?:
           name: agents.name,
           handle: agents.handle,
           machineId: agents.machineId,
-          worksOn: agents.worksOnAgentId,
         })
         .from(agents)
         .where(and(eq(agents.orgId, orgId), inArray(agents.machineId, ids), isNull(agents.archivedAt)))
@@ -527,7 +526,7 @@ async function machineViews(db: Database, actorId: string, orgId: string, only?:
           .from(agents)
           .where(and(eq(agents.orgId, orgId), eq(agents.builtin, RIGHT_HAND), isNull(agents.archivedAt)))
       : [];
-  if (rightHand && homeRow) using.push({ ...rightHand, machineId: homeRow.id, worksOn: null });
+  if (rightHand && homeRow) using.push({ ...rightHand, machineId: homeRow.id });
   // Its shared seat there is opened like any agent's computer, by the admins of computers and its owner
   // (`computerDriving` with `shared`): only they are shown it.
   const sharedSeat =
@@ -585,9 +584,7 @@ async function machineViews(db: Database, actorId: string, orgId: string, only?:
       /** The coding CLIs there that can't start, with their own error line; admins and the pairer only. */
       cliErrors: (admin || mine) && !managed ? (m.executors?.broken ?? null) : null,
       pairedBy: m.pairedByUserId ? { id: m.pairedByUserId, name: pairedByName ?? "" } : null,
-      agents: using
-        .filter((a) => a.machineId === m.id)
-        .map((a) => ({ id: a.id, name: a.name, handle: a.handle, worksOnAgentId: a.worksOn })),
+      agents: using.filter((a) => a.machineId === m.id).map((a) => ({ id: a.id, name: a.name, handle: a.handle })),
       /**
        * The right hand's id where this computer holds its shared seat (ADR 0175) and this person may open it, as they
        * may any agent's computer here; null otherwise.
@@ -1072,6 +1069,12 @@ export async function setAgentComputerTarget(
   const moved = (machine?.id ?? null) !== agent.machineId;
   // The agents working on its computer (ADR 0202) go with it, in the same step and from the same sign-in.
   const followers = await deps.db.transaction(async (tx) => {
+    // The row lock `setWorksOn` takes on the lead: a link made meanwhile is seen by the follower update below.
+    await tx
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.orgId, orgId), eq(agents.id, agentId)))
+      .for("update");
     const set = {
       machineId: machine?.id ?? null,
       // An account is a folder on one computer (ADR 0041): another computer starts on its own sign-in.
@@ -1090,6 +1093,9 @@ export async function setAgentComputerTarget(
       .returning({ id: agents.id });
   });
   for (const m of followers) caches.agents.delete(`${orgId}:${m.id}`);
+  const followerTarget: ComputerTarget = machine
+    ? { kind: "machine", machineId: machine.id, name: machine.name, online: shownOnline(machine) }
+    : { kind: "none" };
   caches.agents.delete(`${orgId}:${agentId}`);
   await recordAudit(deps.db, {
     orgId,
@@ -1106,6 +1112,13 @@ export async function setAgentComputerTarget(
     orgId,
     event: { type: "agent.computer", agentId, target },
   });
+  for (const m of followers) {
+    await publishOrgEvent(deps.pubsub, {
+      type: "org.broadcast",
+      orgId,
+      event: { type: "agent.computer", agentId: m.id, target: followerTarget },
+    });
+  }
   // The machine it left and the one it joined list their agents again (protocol 9).
   await publishMachineAgentsChanged(deps.pubsub, orgId);
   // Later than at once: an account on the new computer is saved next (`setAgentBrain`), and a run claimed between the
