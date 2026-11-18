@@ -1431,3 +1431,121 @@ describe("the link racing the lead's move", () => {
     }
   });
 });
+
+/**
+ * A member's computer work started under its lead's scope (ADR 0202) when the link changes: running tasks, queued
+ * tasks and time holds end under the OLD scope, and what starts afterwards resolves its scope when it starts.
+ */
+describe("a link that changes ends the work started under the old scope", () => {
+  const frames = <Op extends MachineRequest["op"]>(sent: ServerFrame[], op: Op) =>
+    sent.flatMap((x) => (x.type === "request" && x.op === op ? [x as Extract<typeof x, { op: Op }>] : []));
+  const tasks = () => f.db.select().from(schema.machineTasks);
+  const holds = () => f.db.select().from(schema.machineHolds);
+
+  async function working() {
+    const { box, lead, member } = await crew();
+    const other = await addAgent("Cy");
+    await setAgentComputerTarget(deps(), f.owner.id, f.org.id, other.id, box.machineId);
+    await link(member.id, lead.id);
+    const runner = taskRunner(box.token);
+    await runner.hello();
+    const msg = await postPersonMessage({ db: f.db, pubsub: f.pubsub }, f.owner.id, f.org.id, f.general.id, {
+      body: "go",
+    });
+    const input = (title: string) => ({
+      orgId: f.org.id,
+      agent: { id: member.id, handle: member.handle },
+      machineId: box.machineId,
+      protocol: MACHINE_PROTOCOL_VERSION,
+      machineName: "Build box",
+      channelId: f.general.id,
+      threadRootId: msg.id,
+      runId: null,
+      requestedByUserId: f.owner.id,
+      title,
+      executor: "shell" as const,
+      command: "bun dev",
+    });
+    const hub = f.machineHub as MachineHub;
+    const running = await startMachineTask({ db: f.db, pubsub: f.pubsub, call: hub.call }, input("running") as never);
+    const queued = await engine.queueMachineTask({ db: f.db, pubsub: f.pubsub }, input("queued") as never);
+    const [hold] = await f.db
+      .insert(schema.machineHolds)
+      .values({
+        orgId: f.org.id,
+        agentId: member.id,
+        machineId: box.machineId,
+        what: "The bot",
+        why: "answers customers",
+        until: new Date(Date.now() + 86_400_000),
+      })
+      .returning();
+    return { box, lead, member, other, runner, running, queued, hold: hold as NonNullable<typeof hold> };
+  }
+
+  const events: [string, (w: Awaited<ReturnType<typeof working>>) => Promise<unknown>][] = [
+    ["its link is set to another agent", (w) => link(w.member.id, w.other.id)],
+    ["its link is cleared", (w) => link(w.member.id, null)],
+    ["its lead is archived", (w) => archiveAgent(f.db, f.owner.id, f.org.id, w.lead.id, f.pubsub)],
+    [
+      "its lead is deleted",
+      (w) => deleteAgent({ db: f.db, pubsub: f.pubsub, hub: f.machineHub }, f.owner.id, f.org.id, w.lead.id),
+    ],
+    [
+      "its lead moves to another computer",
+      async (w) => setAgentComputerTarget(deps(), f.owner.id, f.org.id, w.lead.id, (await pair("Moved box")).machineId),
+    ],
+  ];
+
+  for (const [name, event] of events) {
+    test(`${name}: the running task is cancelled, the queued one ends and the time hold ends, all as the old lead`, async () => {
+      const w = await working();
+      await event(w);
+      const cancels = frames(w.runner.sent, "task.cancel");
+      expect(cancels.map((c) => c.taskId)).toEqual([w.running.id]);
+      expect(cancels[0]?.agent?.id).toBe(w.lead.id);
+      const queuedNow = (await tasks()).find((t) => t.id === w.queued.id);
+      expect(queuedNow).toMatchObject({ status: "canceled" });
+      expect(queuedNow?.startRequest ?? null).toBeNull();
+      const [end] = frames(w.runner.sent, "keep.end");
+      expect(end).toMatchObject({ holdId: w.hold.id });
+      expect(end?.agent).toMatchObject({ id: w.lead.id, handle: "ada", name: "Ada" });
+      expect((await holds())[0]?.endedAt).not.toBeNull();
+    });
+  }
+
+  test("a queued item saved under the lead's scope starts as nobody once the link is gone: the start resolves again", async () => {
+    const w = await working();
+    // The link goes with no rule run (a forced row), so only the start can notice.
+    await f.db.update(schema.agents).set({ worksOnAgentId: null }).where(eq(schema.agents.id, w.member.id));
+    engine.forgetAgentCaches?.(f.org.id, w.member.id);
+    const claimed = await engine.claimQueuedTask(f.db, w.box.machineId);
+    expect(claimed?.row.id).toBe(w.queued.id);
+    const hub = f.machineHub as MachineHub;
+    const row = claimed?.row as NonNullable<typeof claimed>["row"];
+    await engine.launchTask({ db: f.db, pubsub: f.pubsub, call: hub.call }, row, claimed?.start as never);
+    const starts = frames(w.runner.sent, "task.start").filter((x) => x.taskId === w.queued.id);
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.agent?.id).toBe(w.member.id);
+  });
+
+  test("owner changed: stop, status and output still reach the lead's user by the link; a retake and a start are refused", async () => {
+    const w = await working();
+    await f.db.update(schema.agents).set({ ownerUserId: null }).where(eq(schema.agents.id, w.lead.id));
+    engine.forgetAgentCaches?.(f.org.id, w.lead.id);
+    const row = (await tasks()).find((t) => t.id === w.running.id) as NonNullable<Awaited<ReturnType<typeof tasks>>[0]>;
+    expect((await engine.taskScopeOf(f.db, row, "bia")).id).toBe(w.lead.id);
+    // The computer says hello holding nothing: the time hold is not taken again as a user nobody honors.
+    const again = taskRunner(w.box.token);
+    await again.hello({ holds: { live: [], ended: [] } });
+    await Bun.sleep(150);
+    expect(frames(again.sent, "keep.start")).toHaveLength(0);
+    expect((await holds())[0]?.endReason).toBe("restarted");
+    const hub = f.machineHub as MachineHub;
+    const claimed = await engine.claimQueuedTask(f.db, w.box.machineId);
+    await refusal(
+      engine.launchTask({ db: f.db, pubsub: f.pubsub, call: hub.call }, claimed?.row as never, claimed?.start as never),
+    );
+    expect(frames(again.sent, "task.start").filter((x) => x.taskId === w.queued.id)).toHaveLength(0);
+  });
+});
