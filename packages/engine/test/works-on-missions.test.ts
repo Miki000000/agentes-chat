@@ -79,7 +79,7 @@ function runner(hub: MachineHub) {
   });
   return {
     requests,
-    ops: (op: string) => requests.filter((r) => r.op === op),
+    ops: <Op extends Request["op"]>(op: Op) => requests.filter((r) => r.op === op) as Extract<Request, { op: Op }>[],
     hello: (token: string) => hub.message(conn, JSON.stringify({ type: "hello", token, ...RUNNER, exec: true })),
     frame: (frame: Record<string, unknown>) => reply(frame),
   };
@@ -125,7 +125,7 @@ async function memberMission() {
   return { lead, r, view, paired };
 }
 
-const asLead = (reqs: Request[], lead: { id: string }) => {
+const asLead = (reqs: readonly Request[], lead: { id: string }) => {
   expect(reqs.length).toBeGreaterThan(0);
   for (const req of reqs) expect(req.agent).toMatchObject({ id: lead.id, handle: "ada" });
 };
@@ -175,7 +175,10 @@ describe("a member's mission runs as the lead on the lead's computer", () => {
     const out = await tool?.execute({ title: "Tabs", prompt: "Build the tabs" }, ctx);
     expect(out?.isError).toBeFalsy();
     // A write item starts once the main session's turn ends.
-    await f.db.update(schema.agentRuns).set({ status: "done", finishedAt: new Date() }).where(eq(schema.agentRuns.id, ctx.runId));
+    await f.db
+      .update(schema.agentRuns)
+      .set({ status: "done", finishedAt: new Date() })
+      .where(eq(schema.agentRuns.id, ctx.runId));
     await afterMissionRunEnded(f.missionDeps, ctx.runId);
     expect(r.ops("task.start").length).toBeGreaterThan(1);
     asLead(r.ops("task.start"), lead);
@@ -186,19 +189,19 @@ describe("a member's mission runs as the lead on the lead's computer", () => {
     );
   });
 
-  test("the files it syncs from the computer, and a file its task uploads: the lead's scope", async () => {
+  test("a file its running task uploads, and the files it syncs from the computer: the lead's scope", async () => {
     const { lead, r, view } = await memberMission();
-    // The folder is ready once its setup ends: the mission's files are written there (each read first).
-    await r.frame({ type: "task.done", taskId: r.ops("task.start")[0]?.taskId, exitCode: 0, seconds: 30 });
-    await drainOutbox(f.db, f.handlers);
-    await syncMissionFiles(f.missionDeps, view.id);
-    asLead(r.ops("read"), lead);
-    asLead(r.ops("write"), lead);
     // The task's upload tool: the computer is asked to push the file, as the lead.
     const taskId = r.ops("task.start")[0]?.taskId as string;
     await r.frame({ type: "mcp.call", callId: "up-1", taskId, tool: "upload_artifact", args: { path: "out.txt" } });
     for (let i = 0; i < 200 && r.ops("push").length === 0; i++) await Bun.sleep(5);
     asLead(r.ops("push"), lead);
+    // The folder is ready once its setup ends: the mission's files are written there (each read first).
+    await r.frame({ type: "task.done", taskId, exitCode: 0, seconds: 30 });
+    await drainOutbox(f.db, f.handlers);
+    await syncMissionFiles(f.missionDeps, view.id);
+    asLead(r.ops("read"), lead);
+    asLead(r.ops("write"), lead);
   });
 
   test("every request that reached the computer named the lead: none carried the member's own id", async () => {
@@ -206,4 +209,3 @@ describe("a member's mission runs as the lead on the lead's computer", () => {
     expect(JSON.stringify(r.requests)).not.toContain(f.agent.id);
   });
 });
-

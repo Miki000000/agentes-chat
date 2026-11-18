@@ -15,20 +15,14 @@ const { agents } = schema;
  * "Works on the computer of" (ADR 0202). Agent M (the member) set on agent L (the lead) uses L's computer as L does
  * there: every machine request of M's carries L's id and handle, so the runner gives it L's OS user, folder, services,
  * browser and desktop. M stays its own agent everywhere else (name, instructions, memory, model, sign-in, budget,
- * approvals). One rule, here: `resolveWorksOn`, which every place that builds an agent's scope for a computer calls.
+ * approvals). One rule, here: `resolveForRow`, which every place that builds an agent's scope for a computer calls
+ * (`agentScopeOn` for a caller with only an id).
  */
 
 /** The error code of every refusal of this rule. */
 export const WORKS_ON_CODE = "agent.works_on";
 
 type Row = typeof agents.$inferSelect;
-
-/** What a computer request names: the agent's own scope, or the lead's with the member's name and (server-side only) id. */
-export interface ResolvedScope {
-  scope: AgentScope;
-  /** Present only when the request is a linked member's. The hub reads it for attribution and strips it. */
-  member?: string;
-}
 
 const refusal = (member: Pick<Row, "name">, lead: Pick<Row, "name"> | null, why: string) =>
   new ForbiddenError(
@@ -37,14 +31,16 @@ const refusal = (member: Pick<Row, "name">, lead: Pick<Row, "name"> | null, why:
   );
 
 /**
- * The scope of `agent`'s request to `machineId`. Unlinked: its own, with no other read. Linked: the lead's id and
- * handle with the member's name, honored only while the lead is a live agent of the same non-null owner, is itself on
- * no one's computer, is not the right hand, and the member, the lead and the target are all the same computer; else
- * the member is refused, naming the lead, and nothing runs as the member's own user (ADR 0202).
+ * The scope of `agent`'s request to `machineId`. Unlinked: its own, with no other read. Linked: the lead's id, handle
+ * and name (the computer's user is the lead's, and so is the name its commits are made under), with the member's id
+ * beside them for the hub, which takes the commit line from that row and strips the field before the wire; honored
+ * only while the lead is a live agent of the same non-null owner, is itself on no one's computer, is not the right
+ * hand, and the member, the lead and the target are all the same computer; else the member is refused, naming the
+ * lead, and nothing runs as the member's own user (ADR 0202).
  */
-export async function resolveForRow(db: Database, agent: Row, machineId: string): Promise<ResolvedScope> {
+export async function resolveForRow(db: Database, agent: Row, machineId: string): Promise<AgentScope> {
   if (!agent.worksOnAgentId) {
-    return { scope: { id: agent.id, handle: agent.handle, ...(agent.name ? { name: agent.name } : {}) } };
+    return { id: agent.id, handle: agent.handle, ...(agent.name ? { name: agent.name } : {}) };
   }
   const lead = await getAgentCached(db, agent.orgId, agent.worksOnAgentId);
   if (!lead) throw refusal(agent, null, "it is gone.");
@@ -57,16 +53,10 @@ export async function resolveForRow(db: Database, agent: Row, machineId: string)
   if (!lead.machineId || lead.machineId !== agent.machineId || lead.machineId !== machineId) {
     throw refusal(agent, lead, `it is not on ${lead.name}'s computer.`);
   }
-  return { scope: { id: lead.id, handle: lead.handle, name: agent.name }, member: agent.id };
+  return { id: lead.id, handle: lead.handle, name: lead.name, member: agent.id };
 }
 
-/** `resolveForRow` as one `AgentScope`, the member's id on it for the hub (which strips it). */
-export async function worksOnScope(db: Database, agent: Row, machineId: string): Promise<AgentScope> {
-  const { scope, member } = await resolveForRow(db, agent, machineId);
-  return member ? { ...scope, member } : scope;
-}
-
-/** The scope `agentId`'s request to `machineId` carries, for a caller that has only the id (`worksOnScope` of its row). */
+/** The scope `agentId`'s request to `machineId` carries, for a caller that has only the id (`resolveForRow` of its row). */
 export async function agentScopeOn(
   db: Database,
   orgId: string,
@@ -74,21 +64,10 @@ export async function agentScopeOn(
   machineId: string,
 ): Promise<AgentScope> {
   const agent = await getAgentCached(db, orgId, agentId);
-  return agent ? worksOnScope(db, agent, machineId) : { id: agentId, handle: "agent" };
+  return agent ? resolveForRow(db, agent, machineId) : { id: agentId, handle: "agent" };
 }
 
-export async function resolveWorksOn(
-  db: Database,
-  orgId: string,
-  agentId: string,
-  machineId: string,
-): Promise<ResolvedScope> {
-  const agent = await getAgentCached(db, orgId, agentId);
-  if (!agent) return { scope: { id: agentId, handle: "agent" } };
-  return resolveForRow(db, agent, machineId);
-}
-
-/** The agents working on `leadId`'s computer: the one list web, phone and the computer's agents all read. */
+/** The live agents working on `leadId`'s computer, for the lead's own context (archived ones are not told). */
 export async function membersOf(db: Database, orgId: string, leadId: string) {
   return db
     .select({ id: agents.id, handle: agents.handle, name: agents.name })
@@ -108,11 +87,7 @@ export async function membersOf(db: Database, orgId: string, leadId: string) {
  * `assertCanWork` for a request's scope: a held lead refuses its members' work, and says whose hold it is (the member
  * itself is held by its own id in the executor and gateway).
  */
-export async function assertCanWorkFor(
-  db: Database,
-  orgId: string,
-  scope: (AgentScope & { member?: string }) | undefined,
-) {
+export async function assertCanWorkFor(db: Database, orgId: string, scope: AgentScope | undefined) {
   try {
     await assertCanWork(db, orgId, scope?.id);
   } catch (error) {
@@ -276,8 +251,8 @@ export async function stopMembersWork(
 
 /**
  * Who works on whose computer, as the apps show it, from one list of agents: for each, the agent it works on (`worksOn`)
- * and the live agents working on its computer (`crew`, the same people `membersOf` answers). The one function web and
- * phone lists read, so they agree.
+ * and the agents working on its computer (`crew`), archived ones included and marked, so the apps never recompute
+ * either from the live list (`membersOf` answers only the live ones, for the lead's context).
  */
 export function worksOnViews(
   list: readonly Pick<Row, "id" | "name" | "handle" | "worksOnAgentId" | "archivedAt">[],

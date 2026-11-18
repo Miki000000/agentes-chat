@@ -48,6 +48,7 @@ import { runnerUpdateWay } from "./runner-update";
 import { replyThreadOf } from "./runs";
 import { hopLimitReached, runStretchOf } from "./stretch";
 import type { ToolContext } from "./tools/types";
+import { resolveForRow } from "./works-on";
 
 const { machineTasks, agentRuns } = schema;
 
@@ -221,11 +222,26 @@ export interface TaskDeps {
   pubsub?: PubSub;
 }
 
-/** The agent as a task's computer knows it: the agent, or the seat its task runs in (`scopeId`). */
-export const taskScope = (task: { agentId: string; scopeId?: string | null }, handle: string) => ({
-  id: task.scopeId ?? task.agentId,
-  handle,
-});
+/**
+ * The agent as a task's computer knows it: the seat its task runs in (`scopeId`), the lead for a member's task (ADR
+ * 0202: its row has no seat), or the agent. Asking after a member's task (stop, status, output) must reach the
+ * computer even when the link is no longer honored, so then the lead's id comes from the link itself.
+ */
+export async function taskScopeOf(
+  db: Database,
+  task: { orgId: string; agentId: string; machineId: string; scopeId?: string | null },
+  handle: string,
+): Promise<AgentScope> {
+  if (task.scopeId) return { id: task.scopeId, handle };
+  const agent = await getAgentCached(db, task.orgId, task.agentId);
+  if (!agent?.worksOnAgentId) return { id: task.agentId, handle };
+  try {
+    return await resolveForRow(db, agent, task.machineId);
+  } catch {
+    const lead = await getAgentCached(db, task.orgId, agent.worksOnAgentId).catch(() => null);
+    return lead ? { id: lead.id, handle: lead.handle } : { id: task.agentId, handle };
+  }
+}
 
 export interface StartTaskInput {
   orgId: string;
@@ -914,10 +930,15 @@ export async function settleInterruptedTask(
     const asked = claimed.startedAt ? null : claimed.prompt;
     const shell = claimed.executor === "shell";
     try {
+      // A member's task has no seat: it starts as the lead's scope again, and not at all (the agent hears it was
+      // interrupted) when the link is no longer honored there.
+      const own = claimed.scopeId ? null : await getAgentCached(deps.db, claimed.orgId, claimed.agentId);
+      const scope = own?.worksOnAgentId ? await resolveForRow(deps.db, own, claimed.machineId) : undefined;
       const again = {
         orgId: claimed.orgId,
         agent: { id: claimed.agentId, handle: handle ?? "agent" },
         scopeId: claimed.scopeId,
+        ...(scope ? { scope } : {}),
         machineId: claimed.machineId,
         protocol: machine.protocol,
         machineName: machine.name,
@@ -1168,13 +1189,14 @@ export async function cancelOrgTasks(
     );
   await Promise.all(
     rows.map(async ({ task, handle }) => {
+      const agent = await taskScopeOf(deps.db, task, handle);
       await deps.db.update(machineTasks).set({ canceledBy, updatedAt: new Date() }).where(eq(machineTasks.id, task.id));
       // A task with a start request still waits in our queue: its computer never had it.
       const reply =
         deps.call && !task.startRequest
           ? await deps
               .call<"task.cancel">(task.machineId, {
-                agent: taskScope(task, handle),
+                agent,
                 op: "task.cancel",
                 taskId: task.id,
               })
@@ -1274,9 +1296,10 @@ export async function checkCutTaskStart(
     .select({ handle: schema.agents.handle })
     .from(schema.agents)
     .where(eq(schema.agents.id, row.agentId));
+  const scope = await taskScopeOf(deps.db, row, agent?.handle ?? "agent");
   const reply = await deps
     .call<"task.status">(row.machineId, {
-      agent: taskScope(row, agent?.handle ?? "agent"),
+      agent: scope,
       op: "task.status",
       taskId: row.id,
     })

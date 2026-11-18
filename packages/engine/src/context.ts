@@ -1314,7 +1314,7 @@ export async function buildRunContext(
                 {
                   text: [
                     "# Where you work",
-                    `You work on ${w.name}'s computer, in its folder, with what is installed and set up there, the services it runs and the sign-ins it keeps there: all of it is shared with ${[w.name, ...w.others].join(", ")}. What you change there changes it for them, and what they leave there is what you find. You stay yourself everywhere else: your own name, instructions, memory, model and conversations, and your commits carry your name. Git branches under agentes/${w.handle}/ are the folder's.`,
+                    `You work on ${w.name}'s computer, in its folder, with what is installed and set up there, the services it runs and the sign-ins it keeps there: all of it is shared with ${[w.name, ...w.others].join(", ")}. What you change there changes it for them, and what they leave there is what you find. You stay yourself everywhere else: your own name, instructions, memory, model and conversations, and your commits carry your name. Push your own branches under agentes/<your handle>/ (the proxy lets an agent push only there); the ones under agentes/${w.handle}/ are ${w.name}'s.`,
                   ].join("\n"),
                 },
               ]

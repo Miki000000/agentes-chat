@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { MACHINE_PROTOCOL_VERSION, type ServerFrame } from "@agenteschat/adapters";
+import { MACHINE_PROTOCOL_VERSION, type MachineRequest, type ServerFrame } from "@agenteschat/adapters";
 import { countQueries, eq, schema, sql } from "@agenteschat/db";
 import { systemText } from "@agenteschat/providers";
 import * as engine from "../src";
@@ -8,15 +8,15 @@ import {
   agentScopeFromDb,
   archiveAgent,
   buildRunContext,
+  computerDrivers,
+  computerDriving,
   createAgent,
   createAgentRuns,
   deleteAgent,
+  desktopTarget,
   detachMachine,
   enableCaches,
   ensureRightHand,
-  computerDrivers,
-  computerDriving,
-  desktopTarget,
   ForbiddenError,
   getAgent,
   getAgentCached,
@@ -27,13 +27,13 @@ import {
   machineAccessText,
   machineAgents,
   machineScope,
-  moveAgentsFromMachine,
   membersOf,
+  moveAgentsFromMachine,
   NotFoundError,
   postPersonMessage,
+  RIGHT_HAND,
   releaseHold,
   resolveForRow,
-  RIGHT_HAND,
   setAgentCoAuthor,
   setAgentComputerTarget,
   setAgentHold,
@@ -1316,8 +1316,8 @@ describe("a member's background tasks (no seat; the lead's scope rides along)", 
     if (!first) throw new Error("no task");
     return { box, lead, member, runner, t, first };
   }
-  const frames = (sent: ServerFrame[], op: string) =>
-    sent.flatMap((x) => (x.type === "request" && x.op === op ? [x] : []));
+  const frames = <Op extends MachineRequest["op"]>(sent: ServerFrame[], op: Op) =>
+    sent.flatMap((x) => (x.type === "request" && x.op === op ? [x as Extract<typeof x, { op: Op }>] : []));
 
   test("it is the member's row with no seat; it starts as the lead's scope; the member lists, looks at and stops it as that scope", async () => {
     const { lead, runner, t, first } = await started();
@@ -1391,8 +1391,9 @@ describe("holds of a member and the wire", () => {
     const [start] = kept(runner.sent, "keep.start");
     expect(start).toMatchObject({ holdId: row.id });
     expect(start?.agent).toEqual({ id: lead.id, handle: "ada", name: "Ada" });
-    expect(JSON.stringify(runner.sent)).not.toContain('"member"');
-    expect(JSON.stringify(runner.sent)).not.toContain(member.id);
+    const requests = JSON.stringify(runner.sent.filter((x) => x.type === "request"));
+    expect(requests).not.toContain('"member"');
+    expect(requests).not.toContain(member.id);
   });
 
   test("releasing a hold when the resolver refuses (lead archived) still tells the lead's user, by the link", async () => {

@@ -22,6 +22,7 @@ import { toolMachineId } from "../right-hand-seats";
 import { runnerUpdateWay } from "../runner-update";
 import { standingRefusal } from "../standing";
 import { grantedScopeKeys } from "../tools/scopes";
+import { resolveForRow } from "../works-on";
 import { agentCommitEmail, GIT_TOKEN_TTL_SECONDS, gitProxyBase, issueGitToken, machineGitGen } from "./credential";
 import { appTokenForRepo, botIdentity, boundInstallations, type GitHubAppConfig, type GitHubHttp } from "./github-app";
 import { gitAccess } from "./proxy";
@@ -97,6 +98,8 @@ export async function machineGitSetup(
   const agent = await getAgentCached(deps.db, orgId, agentId);
   // Without a scope (a brain's turn) the right hand has no checkout: its locked turn prepares none (ADR 0137 §4).
   if (!agent || (scope ? await toolMachineId(deps.db, agent) : agent.machineId) !== machineId) return null;
+  // A member works in its lead's folder there (ADR 0202): the checkouts it syncs and is told about are the lead's.
+  scope ??= agent.worksOnAgentId ? await resolveForRow(deps.db, agent, machineId) : undefined;
   const [machine] = await deps.db
     .select({ tokenHash: schema.machines.tokenHash })
     .from(schema.machines)
@@ -414,7 +417,15 @@ export async function prepareAgentCode(
       ...(r.defaultBranch ? { defaultBranch: r.defaultBranch } : {}),
       ...(r.status === "failed" ? { stale: r.message || "the update failed" } : {}),
     }));
-    const prompt = codePrompt({ handle: agent.handle, checkouts, notCloned, downloading });
+    // Its own branches (the proxy lets an agent push only to its own handle's), in the folder of the lead when it works there.
+    const own = await getAgentCached(deps.db, turn.orgId, turn.agentId);
+    const prompt = codePrompt({
+      handle: own?.handle ?? agent.handle,
+      checkouts,
+      notCloned,
+      downloading,
+      ...(agent.id !== turn.agentId ? { folderOf: agent.name ?? agent.handle } : {}),
+    });
     return { ...codeStart(pick, turn), prompt, pick };
   } catch {
     // Offline, slow, refused: the turn goes on in the agent's folder, as before.

@@ -396,16 +396,47 @@ export async function requireComputerDriver(
 }
 
 /**
- * The agent's computer and why this person may not drive it (`driveRefusal`), null when they may. `shared`: the right
+ * The agents whose OS user a desktop or terminal of `agentId` runs as: itself, and for a linked member its lead, which
+ * runs every one of its members' work (ADR 0202); and for a lead, its members too. The sign-in any of them lends
+ * (`lentAccount`) is kept lent to that one user (ADR 0059 §8), so it counts for all of them.
+ */
+async function driveCrew(db: Database, orgId: string, agent: { id: string; worksOnAgentId: string | null }) {
+  const leadId = agent.worksOnAgentId ?? agent.id;
+  const rows = await db
+    .select({
+      id: agents.id,
+      ...REACH_COLUMNS,
+      account: agents.brainAccountId,
+    })
+    .from(agents)
+    .where(
+      and(
+        eq(agents.orgId, orgId),
+        isNull(agents.deletedAt),
+        or(eq(agents.id, leadId), eq(agents.worksOnAgentId, leadId)),
+      ),
+    );
+  return {
+    lead: agent.worksOnAgentId ? (rows.find((r) => r.id === leadId) ?? null) : null,
+    signIn: rows.some((r) => lentAccount(r) !== null),
+  };
+}
+
+/**
+ * The agent's computer and why this person may not drive it (`driveRefusal`), null when they may. A linked member's
+ * desktop and terminal are its lead's OS user, so they must pass for the lead too, and a sign-in lent by the lead or
+ * by any member counts for both (ADR 0202). `shared`: the right
  * hand's shared seat (ADR 0175) is meant, not the person's own; it means nothing for any other agent.
  */
 export async function computerDriving(db: Database, userId: string, orgId: string, agentId: string, shared = false) {
   const membership = await requireActiveMembership(db, userId, orgId);
   const [agent] = await db
     .select({
+      id: agents.id,
       machineId: agents.machineId,
       account: agents.brainAccountId,
       builtin: agents.builtin,
+      worksOnAgentId: agents.worksOnAgentId,
       ...REACH_COLUMNS,
     })
     .from(agents)
@@ -421,17 +452,23 @@ export async function computerDriving(db: Database, userId: string, orgId: strin
     const keyed = can(membership, "own_computers") || can(membership, "control_computers");
     return { machine, refusal: keyed ? null : ("role" as const) };
   }
-  const person = {
+  const personFor = (a: Parameters<typeof managesAgent>[0]) => ({
     userId,
     admin: can(membership, "control_computers"),
     own: can(membership, "own_computers"),
-    owner: agent.ownerUserId === userId,
-    manages: managesAgent(agent, userId, membership),
+    owner: a.ownerUserId === userId,
+    manages: managesAgent(a, userId, membership),
     browsers: can(membership, "control_browsers"),
-  };
+  });
   // The shared seat is driven like any agent's computer, by the rule above. Its OS user never holds a plan's sign-in:
   // the right hand thinks as another user (ADR 0137 §4).
-  return { machine, refusal: driveRefusal(machine, person, !home && lentAccount(agent) !== null) };
+  if (home) return { machine, refusal: driveRefusal(machine, personFor(agent), false) };
+  const { lead, signIn } = await driveCrew(db, orgId, agent);
+  return {
+    machine,
+    refusal:
+      driveRefusal(machine, personFor(agent), signIn) ?? (lead ? driveRefusal(machine, personFor(lead), signIn) : null),
+  };
 }
 
 /** Whether this person may drive the agent's computer now (`computerDriving`); false where it has none. */
@@ -449,11 +486,13 @@ export const mayDriveComputer = (db: Database, userId: string, orgId: string, ag
 export async function computerDrivers(db: Database, orgId: string, agentId: string): Promise<string[]> {
   const [agent] = await db
     .select({
+      id: agents.id,
       machineId: agents.machineId,
       owner: agents.ownerUserId,
       brain: agents.brain,
       account: agents.brainAccountId,
       builtin: agents.builtin,
+      worksOnAgentId: agents.worksOnAgentId,
     })
     .from(agents)
     .where(and(eq(agents.id, agentId), eq(agents.orgId, orgId)));
@@ -461,8 +500,11 @@ export async function computerDrivers(db: Database, orgId: string, agentId: stri
   const machineId = home ?? agent?.machineId;
   const machine = machineId ? await getMachine(db, orgId, machineId) : null;
   if (!agent || !machine) return [];
-  const signIn = !home && lentAccount(agent) !== null;
-  const named = [agent.owner, machine.pairedByUserId].filter((id): id is string => !!id);
+  // A member's desktop is its lead's OS user: whoever may not drive the lead's is not asked (`computerDriving`).
+  const crew = home ? { lead: null, signIn: false } : await driveCrew(db, orgId, agent);
+  const signIn = crew.signIn;
+  const leadId = crew.lead?.id ?? null;
+  const named = [agent.owner, crew.lead?.ownerUserId, machine.pairedByUserId].filter((id): id is string => !!id);
   // Who may drive it (`control_computers`, `own_computers`, ADR 0085), read once per member, and the people named above;
   // `manages`: who manages this agent (`managesAgentSql`, ADR 0085 addendum of 2026-11-17).
   const everyone = await db
@@ -472,13 +514,20 @@ export async function computerDrivers(db: Database, orgId: string, agentId: stri
       own: maySql(orgId, organizationMembers.userId, "own_computers"),
       manages: sql<boolean>`exists (select 1 from ${agents} ag where ag.id = ${agentId}::uuid
         and ag.org_id = ${orgId}::uuid and ${managesAgentSql("ag", sql`${organizationMembers.userId}`)})`,
+      managesLead: sql<boolean>`${leadId === null} or exists (select 1 from ${agents} ag where ag.id = ${leadId}::uuid
+        and ag.org_id = ${orgId}::uuid and ${managesAgentSql("ag", sql`${organizationMembers.userId}`)})`,
     })
     .from(organizationMembers)
     .where(eq(organizationMembers.orgId, orgId))
     .orderBy(organizationMembers.createdAt);
   const members = everyone.filter((m) => m.admin || named.includes(m.userId));
   const drivers = members
-    .filter((m) => drivesComputer(machine, { ...m, owner: m.userId === agent.owner }, signIn))
+    .filter(
+      (m) =>
+        drivesComputer(machine, { ...m, owner: m.userId === agent.owner }, signIn) &&
+        (!crew.lead ||
+          drivesComputer(machine, { ...m, manages: m.managesLead, owner: m.userId === crew.lead.ownerUserId }, signIn)),
+    )
     .map((m) => m.userId);
   return agent.owner && drivers.includes(agent.owner) ? [agent.owner] : drivers;
 }

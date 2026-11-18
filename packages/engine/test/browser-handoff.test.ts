@@ -28,7 +28,6 @@ import {
   expireControl,
   ForbiddenError,
   finishHandoff,
-  setWorksOn,
   grantScopes,
   HANDOFF_REMIND_AFTER_MS,
   handoffInfo,
@@ -48,6 +47,7 @@ import {
   requireBrowserControl,
   requirePageRead,
   setMessageLinkBase,
+  setWorksOn,
   startTakeover,
   stopAgentBrowser,
   stopChecksSettled,
@@ -178,17 +178,11 @@ async function runFor(userId: string) {
 describe("browser_ask_person", () => {
   test("an agent working on another's computer is asked about as that agent there: the page it checks is the lead's browser", async () => {
     const machine = await start();
-    const lead = (
-      await f.db
-        .insert(schema.agents)
-        .values({
-          ...((await f.db.select().from(schema.agents).where(eq(schema.agents.id, f.agent.id)))[0] as never),
-          id: crypto.randomUUID(),
-          name: "Ada",
-          handle: "ada",
-        })
-        .returning()
-    )[0];
+    const [own] = await f.db.select().from(schema.agents).where(eq(schema.agents.id, f.agent.id));
+    const [lead] = await f.db
+      .insert(schema.agents)
+      .values({ ...(own as typeof schema.agents.$inferSelect), id: crypto.randomUUID(), name: "Ada", handle: "ada" })
+      .returning();
     if (!lead) throw new Error("no lead");
     await f.db.update(schema.agents).set({ ownerUserId: f.owner.id }).where(eq(schema.agents.orgId, f.org.id));
     await setWorksOn(deps(), f.owner.id, f.org.id, f.agent.id, lead.id);

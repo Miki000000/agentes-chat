@@ -40,7 +40,7 @@ import {
   RECENT_LINES,
   startMachineTask,
   taskModeOf,
-  taskScope,
+  taskScopeOf,
   taskSeconds,
 } from "./machine-tasks";
 import { MachineOfflineError, type MachineRow, shownOnline } from "./machines";
@@ -78,6 +78,7 @@ import { runnerUpdateWay } from "./runner-update";
 import type { SearchDeps } from "./search";
 import { autoThreadTitle, createThreadFromRange } from "./threads";
 import { createWikiPage } from "./wiki";
+import { agentScopeOn } from "./works-on";
 
 export { MISSION_LIMITS };
 
@@ -1363,11 +1364,13 @@ export async function startSessionTask(
     throw new ConflictError("The mission's computer was removed", "mission.needs_computer");
   }
   const agent = await getAgentCached(deps.db, mission.orgId, mission.agentId);
+  const scope = await agentScopeOn(deps.db, mission.orgId, mission.agentId, mission.machineId);
   return startMachineTask(
     { db: deps.db, pubsub: deps.pubsub, call: hub.call },
     {
       orgId: mission.orgId,
       agent: { id: mission.agentId, handle: agent?.handle ?? "agent" },
+      ...(scope.member ? { scope } : {}),
       machineId: mission.machineId,
       protocol: status.protocol,
       machineName: status.name,
@@ -1811,7 +1814,7 @@ async function cancelMissionTasks(deps: MissionDeps, mission: MissionRow, actorI
       reply =
         deps.hub && !row.startRequest
           ? await deps.hub.call<"task.cancel">(row.machineId, {
-              agent: { id: mission.agentId, handle: agent?.handle ?? "agent" },
+              agent: await taskScopeOf(deps.db, row, agent?.handle ?? "agent"),
               op: "task.cancel",
               taskId: row.id,
             })
@@ -3495,7 +3498,7 @@ export async function getTaskOutput(
       const agent = await getAgentCached(deps.db, orgId, row.agentId);
       const out = await deps.hub.call<"task.output">(
         row.machineId,
-        { op: "task.output", taskId: row.id, tail, agent: taskScope(row, agent?.handle ?? "agent") },
+        { op: "task.output", taskId: row.id, tail, agent: await taskScopeOf(deps.db, row, agent?.handle ?? "agent") },
         { timeoutMs: 15_000 },
       );
       const lines = (Array.isArray(out?.lines) ? out.lines : []).map((l) => String(l).slice(0, 500)).slice(-tail);
