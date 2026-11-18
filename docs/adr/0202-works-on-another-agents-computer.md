@@ -2,12 +2,13 @@
 
 - Status: Accepted (built). Decided by user instruction and debated defaults, not by an owner decision.
 - Date: 2026-11-18
-- Extends: 0148 (an agent's line, which this is not), 0175 (a request carrying an id that is not the agent's own)
+- Extends: 0137 (the right hand has no one working on it, and its scope is a seat), 0148 (an agent's line, which this
+  is not), 0175 (a request carrying an id that is not the agent's own)
 - Amends: 0057 (files, sign-ins, browser profiles and processes belong to each agent's own user: not for an agent a
   person put on another's computer), 0096 (an agent reaches only its own slice's ports: a member's request is its
   lead's), 0059 §2 (the invariant that no agent that doesn't think with an account can read it: a member's AI account
   stays lent to its lead's user while linked)
-- Code: `packages/engine/src/works-on.ts` (`resolveWorksOn`, `worksOnScope`, `setWorksOn`, `membersOf`, `worksOnViews`,
+- Code: `packages/engine/src/works-on.ts` (`resolveForRow`, `agentScopeOn`, `setWorksOn`, `membersOf`, `worksOnViews`,
   `stopMembersWork`), `agents.works_on_agent_id` (migration 0306), `PUT …/agents/{agentId}/works-on`
   (`apps/server/src/routes/machines.ts`), web `AgentComputerPanel` (`apps/web/src/components/AgentComputer.tsx`), phone
   `apps/mobile/src/features/agents/WorksOnSection.tsx`, the rule shared by both `packages/client/src/lib/works-on.ts`.
@@ -28,19 +29,33 @@ The default is unset: nothing changes for any agent until a person sets it. No w
 
 How it works:
 
-- One rule, `resolveWorksOn` (`works-on.ts`). Every machine request M makes carries L's `id` and `handle` (the runner
-  derives everything from them), with M's name. M's brain turns keep M's own session ids. `machineScope` and
-  `agentScopeFromDb` call it, as do the places that build a scope by id (`agentScopeOn`: folder grants, holds, the
-  browser's warm and act, a person's view of an agent's computer).
+- One rule, `resolveForRow` (`works-on.ts`; `agentScopeOn` for a caller with only an id). Every machine request M
+  makes carries L's `id`, `handle` and name (the runner derives the OS user, folder, ports and the commit name from
+  them), with M's id beside them server-side only. M's brain turns keep M's own session ids. `machineScope` and
+  `agentScopeFromDb` call it, and so does every place that builds a scope for a computer: folder grants, holds, tasks
+  (start, stop, status, resume: a member's task row has no seat, `scope_id` stays the right hand's seat and the lead's
+  scope rides along, `taskScopeOf`), missions (worktree, files, tasks, uploads), the pre-turn checkout sync
+  (`prepareAgentCode`), the browser's warm, act, live view, input, restart and keep-alive, a person's view of an
+  agent's desktop and browser (`viewerScope`), the handoff's page check, and the plan router's sign-ins
+  (`planSignInsOf`).
 - The link is honored only while L is a live agent of the same non-null owner, is not a member itself, is not the right
   hand, and M, L and the computer the request goes to are the same one. Otherwise the request is refused, naming L, and
   never runs as M's own user. L's hold refuses M's work and says whose it is; M's own hold is its own.
-- The hub (`outgoing()`) takes the name and the `Co-authored-by` line from M's row and removes the member field before
-  the request goes out: commits stay M's, no protocol change.
-- Setting it: whoever owns or manages both agents (a plain owner may link their own two), and, to put M on L's computer,
-  the setter's computer rule. Same owner, one level (L works on no one; an agent with any member, archived ones too,
-  works on no one), never the right hand or an archived agent, and L has a computer. Linking moves M onto L's computer
-  in the same transaction and clears its AI account there, as any move does. Clearing needs only managing M.
+- The hub (`outgoing()`) takes the `Co-authored-by` line from M's row and removes the member field before the request
+  goes out (`callLocal` strips it for every path, hold reconciliation included): commits carry M's co-author line and
+  L's name as author, no protocol change.
+- Setting it: whoever manages both agents (`managesAgent`, ADR 0085 addendum of 2026-11-17, as `setReportsTo` does) and,
+  to put M on L's computer, the setter's computer rule. Same non-null owner, one level (L works on no one; an agent
+  with any member, archived ones too, works on no one), never the right hand or an archived agent, and L has a
+  computer. Linking takes L's row lock and moves M onto L's computer in the same transaction, clearing its AI account
+  there as any move does; L's move and L's deletion take the same lock, so a link racing either ends with M where L
+  is. Clearing needs only managing M.
+- Reach: what M may be asked to do in L's environment is bounded by both agents' audiences and by the person who
+  linked them (who manages both); M's audience is who may ask M, L's audience is who may ask L, and a person in M's
+  audience and not in L's acts in L's environment through M. That is the trade-off the apps state. Driving M's
+  desktop or terminal, taking control of it or being asked for help on it is driving L's OS user, so a person must
+  pass the driving rule for L as well as for M (`computerDriving`, `computerDrivers`; manages and owner read from
+  each row), and a sign-in lent by L or by any of its members counts for both.
 - Placement: M chooses no computer of its own while linked (`setAgentComputerTarget` refuses, bulk moves skip it,
   `works_on`). L's move takes its members along in one transaction and wakes their waiting runs. Lead archived: its
   members' tasks are cancelled and their requests refused while it is, the link kept. Lead deleted: the links are
@@ -48,9 +63,11 @@ How it works:
   computer) is caught at resolve time by the same-computer check.
 - Sign-ins: L's frame entry lists its members' AI accounts, so the runner's keep set never closes M's process or task,
   and M's own entry stays with no account, so the folder lent to L's user is never taken back for M's. **A member's AI
-  account stays lent to L's OS user while linked**, not only during M's turn (amends 0059 §2): the same owner bounds it.
-- The apps say it plainly: on that computer M can do what L can, including using L's sign-ins and files there; its own AI
-  account, memory and name stay its own; approvals for sensitive actions still go to people.
+  sign-in is kept lent to L's OS user while linked**, not only during M's turn (amends 0059 §2): the same owner bounds
+  it, and anyone who can drive L's computer can reach it, which is why driving needs the lead's rule too.
+- The apps say it plainly (`worksOn.tradeoff`): on that computer M can do what L can, including using L's sign-ins and
+  files there; M's own AI sign-in stays available there, kept lent to L's user; its memory and name stay its own;
+  approvals for sensitive actions still go to people.
 
 ## What differs from ADR 0094
 
@@ -61,10 +78,17 @@ lead's computer, and gives M the lead's identity on that computer only: nothing 
 
 - One warm model process per lead's id and runner: a lead and its members alternating turns restart each other's idle
   process (cold start, lost prompt cache). A running turn is never closed for another's. Accepted.
-- M's commits carry M's name but git branches under `agentes/<lead handle>/` are the folder's: M may push there and not
-  under `agentes/<its handle>/`.
-- Rolled back to code without this: the column is ignored, M works as its own user again with a new folder; files it made
-  in L's folder stay there.
-- Known limits: a person watching a member's browser live, a desktop handoff's seat and the phone's device tools still use
-  the member's own id (see the PR's list); the two-agents-one-system-computer path is reasoned from code, not run on a
-  real system-mode computer.
+- M's commits carry L's name as author and M's `Co-authored-by` line. M pushes under `agentes/<its handle>/` (the git
+  proxy knows M by its own token); the branches under `agentes/<lead handle>/` are L's.
+- Rolled back to code without this: the column is ignored. A link left by the newer server is not honored by code that
+  does not know it: M works as its own user again with a new folder, files it made in L's folder stay there, and its
+  tasks and holds that ran under L's user are not found by M's id (the computer ends them). Going forward to code with
+  this again, a link an old server left behind (M on another computer than L, an owner changed) is refused until a person
+  clears or sets it again.
+- Sites that still name the member's own id, and why: a phone's device tools (`device-tools.ts`: the scope names the run's
+  holder for a phone, which is a person's device and not a computer user), the desktop handoff's keep-alive and the
+  cancel path's desktop stop (`desktop.ts`, `cancel.ts`: they act on the member's own desktop session, which does not
+  exist while it is linked, so they are no-ops). Every other site that builds a scope for a computer goes through
+  `resolveForRow`.
+- Not run on a real system-mode computer: the two-agents-one-OS-user path is reasoned from code and the runner's tests.
+- Members per lead are unbounded in this change (one level and the same owner bound the crew).
