@@ -14,6 +14,9 @@ import {
   detachMachine,
   enableCaches,
   ensureRightHand,
+  computerDrivers,
+  computerDriving,
+  desktopTarget,
   ForbiddenError,
   getAgent,
   getAgentCached,
@@ -25,12 +28,16 @@ import {
   machineAgents,
   machineScope,
   moveAgentsFromMachine,
+  membersOf,
   NotFoundError,
   postPersonMessage,
+  releaseHold,
+  resolveForRow,
   RIGHT_HAND,
   setAgentCoAuthor,
   setAgentComputerTarget,
   setAgentHold,
+  setWorksOn,
   startMachineTask,
   stopOrgWork,
   type ToolContext,
@@ -45,13 +52,6 @@ import { fakeRunner, pairMachine } from "./machine-fixtures";
  * request), and stays its own agent everywhere else. M = member, L = lead in the names below (never in the product's
  * words). Every check reads its expected value from the rules, not from the code's output.
  */
-
-// Not in the engine yet when these tests were first run: read off the namespace so each check fails on its own.
-const { membersOf, resolveWorksOn, setWorksOn } = engine as unknown as Record<
-  "membersOf" | "resolveWorksOn" | "setWorksOn",
-  // biome-ignore lint/suspicious/noExplicitAny: typed once the module exists
-  (...args: any[]) => Promise<any>
->;
 
 let f: Fixture;
 afterEach(async () => {
@@ -139,7 +139,7 @@ function taskRunner(token: string) {
   });
   return {
     sent,
-    hello: () =>
+    hello: (extra: Record<string, unknown> = {}) =>
       hub.message(
         conn,
         JSON.stringify({
@@ -150,8 +150,10 @@ function taskRunner(token: string) {
           exec: true,
           mode: "system",
           executors: {},
+          ...extra,
         }),
       ),
+    disconnect: () => hub.close(conn),
   };
 }
 
@@ -515,7 +517,7 @@ describe("the resolver (T1, T7, P2, P3, P4)", () => {
     const want = { id: member.id, handle: "bia", name: "Bia" };
     expect(await scopeOf(member.id, box.machineId)).toStrictEqual(want);
     expect(await agentScopeFromDb(f.db)({ orgId: f.org.id, agentId: member.id } as never)).toStrictEqual(want);
-    expect(await resolveWorksOn(f.db, f.org.id, member.id, box.machineId)).toStrictEqual({ scope: want });
+    expect(await resolveForRow(f.db, await row(member.id), box.machineId)).toStrictEqual(want);
   });
 
   test("an unlinked agent's resolution reads one row: no query beyond the agent's own", async () => {
@@ -524,10 +526,10 @@ describe("the resolver (T1, T7, P2, P3, P4)", () => {
     expect(queries).toBe(1);
   });
 
-  test("a linked member carries the lead's id and handle, its own name, and itself as the member; its brain turn too, its session ids stay its own", async () => {
+  test("a linked member carries the lead's id, handle and name, and itself as the member; its brain turn too, its session ids stay its own", async () => {
     const { box, lead, member } = await crew();
     await link(member.id, lead.id);
-    const want = { id: lead.id, handle: "ada", name: "Bia", member: member.id };
+    const want = { id: lead.id, handle: "ada", name: "Ada", member: member.id };
     expect(await scopeOf(member.id, box.machineId)).toStrictEqual(want);
     expect(await agentScopeFromDb(f.db)({ orgId: f.org.id, agentId: member.id } as never)).toStrictEqual(want);
     // The lead itself is unchanged.
@@ -748,7 +750,7 @@ describe("the hub (T2, T8)", () => {
   const exec = (agent: unknown) =>
     ({ op: "exec" as const, command: "ls", timeoutSeconds: 5, stream: false, agent }) as never;
 
-  test("a member's request reaches the runner as the lead's id and handle, its own name and co-author line, with no member key on the wire", async () => {
+  test("a member's request reaches the runner as the lead's id, handle and name with the member's co-author line, and no member key on the wire", async () => {
     const { box, lead, member } = await crew();
     await link(member.id, lead.id);
     const hub = f.machineHub as MachineHub;
@@ -762,7 +764,7 @@ describe("the hub (T2, T8)", () => {
     expect(m).toEqual({
       id: lead.id,
       handle: "ada",
-      name: "Bia",
+      name: "Ada",
       coAuthors: ["Co-authored-by: Bia <noreply@agentes.chat>"],
     });
     expect(l).toEqual({
@@ -826,7 +828,7 @@ describe("standing and lifecycle (T9)", () => {
     const row = await startMachineTask({ db: f.db, pubsub: f.pubsub, call: (f.machineHub as MachineHub).call }, {
       orgId: f.org.id,
       agent: { id: member.id, handle: member.handle },
-      scopeId: leadId,
+      ...(member.id === leadId ? {} : { scope: await scopeOf(member.id, machineId) }),
       machineId,
       protocol: MACHINE_PROTOCOL_VERSION,
       machineName: "Build box",
@@ -918,14 +920,14 @@ describe("standing and lifecycle (T9)", () => {
     await run(lead.id);
   });
 
-  test("every kind of request, made through its real tool for the member, reaches the runner as the lead's scope with the member's name", async () => {
+  test("every kind of request, made through its real tool for the member, reaches the runner as the lead's scope", async () => {
     const { box, lead, member } = await crew();
     const runner = taskRunner(box.token);
     await runner.hello();
     await link(member.id, lead.id);
     const t = await toolsFor(member, box.machineId);
     const asLead = (x: ServerFrame | undefined) => {
-      expect(x?.type === "request" ? x.agent : null).toMatchObject({ id: lead.id, handle: "ada", name: "Bia" });
+      expect(x?.type === "request" ? x.agent : null).toMatchObject({ id: lead.id, handle: "ada", name: "Ada" });
     };
     const frames = (op: string) => runner.sent.filter((x) => x.type === "request" && x.op === op);
 
@@ -937,7 +939,7 @@ describe("standing and lifecycle (T9)", () => {
     expect(started.isError).toBeFalsy();
     asLead(frames("task.start")[0]);
     const [taskRow] = await f.db.select().from(schema.machineTasks);
-    expect(taskRow).toMatchObject({ agentId: member.id, scopeId: lead.id });
+    expect(taskRow).toMatchObject({ agentId: member.id, scopeId: null });
     // a folder grant
     await t.call("request_folder_access", { path: "/srv/site", reason: "the site" });
     asLead(frames("access.request")[0]);
@@ -1045,7 +1047,6 @@ describe("the rest of the class (F10-F16)", () => {
       .values({
         orgId: f.org.id,
         agentId: member.id,
-        scopeId: lead.id,
         machineId: box.machineId,
         channelId: f.general.id,
         threadRootId: crypto.randomUUID(),
@@ -1206,5 +1207,226 @@ describe("what the member is told (T11)", () => {
     expect(text).toContain("Cy");
     expect(text).not.toBe(machineAccessText(access));
     expect(text.toLowerCase()).not.toContain("only your own folder");
+  });
+});
+
+/** What a person drives when they drive a member: the lead's OS user, with every sign-in its crew lent to it. */
+describe("driving a linked member (the lead's rule applies too)", () => {
+  async function systemCrew() {
+    const c = await crew();
+    await link(c.member.id, c.lead.id);
+    await f.db
+      .update(schema.machines)
+      .set({ executors: { mode: "system" } as never })
+      .where(eq(schema.machines.id, c.box.machineId));
+    // Caio controls computers but doesn't manage agents: the owner's plan is not his, so he can't drive it.
+    const caio = await addMember(f.db, f.org.id, "member", "caio");
+    const [base] = await f.db
+      .select({ permissions: schema.orgRoles.permissions })
+      .from(schema.orgRoles)
+      .where(eq(schema.orgRoles.orgId, f.org.id));
+    await f.db
+      .update(schema.orgRoles)
+      .set({ permissions: [...(base?.permissions ?? []), "control_computers"] })
+      .where(sql`${schema.orgRoles.orgId} = ${f.org.id} and ${schema.orgRoles.kind} = 'everyone'`);
+    const accountId = crypto.randomUUID();
+    await f.db.insert(schema.machineAccounts).values({
+      id: accountId,
+      orgId: f.org.id,
+      machineId: c.box.machineId,
+      kind: "claude_code",
+      label: "Claude Max",
+      status: "active",
+      createdBy: f.owner.id,
+    });
+    const onPlan = (agentId: string, on: boolean) =>
+      f.db
+        .update(schema.agents)
+        .set(on ? { brain: "claude_code", brainAccountId: accountId } : { brain: "model", brainAccountId: null })
+        .where(eq(schema.agents.id, agentId));
+    const drives = (userId: string, agentId: string) =>
+      engine.requireComputerDriver(f.db, userId, f.org.id, agentId).then(
+        () => true,
+        (e: unknown) => {
+          if (e instanceof ForbiddenError) return false;
+          throw e;
+        },
+      );
+    return { ...c, caio, onPlan, drives };
+  }
+
+  test("an admin refused on the lead for the owner's plan is refused on the member too, and the other way round", async () => {
+    const { lead, member, caio, onPlan, drives } = await systemCrew();
+    // Control: nothing is lent, so the person who controls computers drives both.
+    expect([await drives(caio.id, lead.id), await drives(caio.id, member.id)]).toEqual([true, true]);
+    await onPlan(lead.id, true);
+    expect(await drives(caio.id, lead.id)).toBe(false);
+    expect(await drives(caio.id, member.id)).toBe(false);
+    expect((await computerDriving(f.db, caio.id, f.org.id, member.id)).refusal).toBe("owner_plan");
+    // Only the member thinks with a plan: its sign-in is lent to the lead's OS user, which both desktops run as.
+    await onPlan(lead.id, false);
+    await onPlan(member.id, true);
+    expect(await drives(caio.id, member.id)).toBe(false);
+    expect(await drives(caio.id, lead.id)).toBe(false);
+    // The owner drives both, whatever is lent.
+    expect([await drives(f.owner.id, lead.id), await drives(f.owner.id, member.id)]).toEqual([true, true]);
+  });
+
+  test("who a member's desktop asks for help leaves out whoever the lead's rule refuses", async () => {
+    const { lead, member, caio, onPlan } = await systemCrew();
+    // Nobody owns them (the owner answers alone when there is one), so every admin who controls computers is asked.
+    await f.db.update(schema.agents).set({ ownerUserId: null }).where(eq(schema.agents.orgId, f.org.id));
+    expect(await computerDrivers(f.db, f.org.id, member.id)).toContain(caio.id);
+    await onPlan(lead.id, true);
+    const drivers = await computerDrivers(f.db, f.org.id, member.id);
+    expect(drivers).not.toContain(caio.id);
+    expect(drivers).toContain(f.owner.id);
+  });
+
+  test("an unlinked agent is judged on its own row alone", async () => {
+    const { lead, member, caio, onPlan, drives } = await systemCrew();
+    await link(member.id, null);
+    await onPlan(lead.id, true);
+    expect(await drives(caio.id, member.id)).toBe(true);
+    expect(await drives(caio.id, lead.id)).toBe(false);
+  });
+
+  test("a member whose lead is archived: its desktop is none, not a refusal thrown at the viewer", async () => {
+    const { lead, member } = await crew();
+    await link(member.id, lead.id);
+    await archiveAgent(f.db, f.owner.id, f.org.id, lead.id, f.pubsub);
+    expect(await engine.viewerScope(f.db, f.org.id, member.id, f.owner.id, undefined, false)).toMatchObject({
+      scope: null,
+      seat: false,
+    });
+    const target = await desktopTarget(f.db, { isLocal: () => true }, f.org.id, member.id, "desktop", f.owner.id);
+    expect(target).not.toHaveProperty("agent");
+  });
+});
+
+describe("a member's background tasks (no seat; the lead's scope rides along)", () => {
+  async function started() {
+    const { box, lead, member } = await crew();
+    const runner = taskRunner(box.token);
+    await runner.hello();
+    await link(member.id, lead.id);
+    const t = await toolsFor(member, box.machineId);
+    expect((await t.call("start_task", { title: "dev server", command: "bun dev" })).isError).toBeFalsy();
+    const [first] = await f.db.select().from(schema.machineTasks);
+    if (!first) throw new Error("no task");
+    return { box, lead, member, runner, t, first };
+  }
+  const frames = (sent: ServerFrame[], op: string) =>
+    sent.flatMap((x) => (x.type === "request" && x.op === op ? [x] : []));
+
+  test("it is the member's row with no seat; it starts as the lead's scope; the member lists, looks at and stops it as that scope", async () => {
+    const { lead, runner, t, first } = await started();
+    expect(first).toMatchObject({ scopeId: null });
+    expect(frames(runner.sent, "task.start")[0]?.agent).toMatchObject({ id: lead.id, handle: "ada" });
+    expect((await t.call("list_tasks", {})).content).toContain(first.id);
+    expect((await t.call("task_status", { task_id: first.id })).isError).toBeFalsy();
+    expect((await t.call("cancel_task", { task_id: first.id })).isError).toBeFalsy();
+    const cancels = frames(runner.sent, "task.cancel");
+    expect(cancels.map((c) => c.taskId)).toEqual([first.id]);
+    expect(cancels[0]?.agent?.id).toBe(lead.id);
+  });
+
+  test("dropped with its computer, it starts again as the lead's scope, still the member's row with no seat", async () => {
+    const { box, lead, member, runner, first } = await started();
+    await runner.disconnect();
+    const back = taskRunner(box.token);
+    await back.hello({ tasks: [] });
+    const starts = frames(back.sent, "task.start");
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.agent).toMatchObject({ id: lead.id, handle: "ada" });
+    const again = (await f.db.select().from(schema.machineTasks)).find((r) => r.resumedFromId === first.id);
+    expect(again).toMatchObject({ agentId: member.id, scopeId: null, status: "running" });
+  });
+
+  test("a link that is no longer honored (the owner changed): the dropped task does not start again, as nobody", async () => {
+    const { box, lead, runner } = await started();
+    await runner.disconnect();
+    await f.db.update(schema.agents).set({ ownerUserId: null }).where(eq(schema.agents.id, lead.id));
+    const back = taskRunner(box.token);
+    await back.hello({ tasks: [] });
+    expect(frames(back.sent, "task.start")).toHaveLength(0);
+    expect((await f.db.select().from(schema.machineTasks)).filter((r) => r.resumedFromId)).toHaveLength(0);
+  });
+
+  test("a held lead: the dropped member task is not started again (its resume checks the hold of the scope it uses)", async () => {
+    const { box, lead, runner } = await started();
+    await runner.disconnect();
+    await setAgentHold(f.db, f.org.id, lead.id, { held: true, reason: "operator" }, f.pubsub);
+    const back = taskRunner(box.token);
+    await back.hello({ tasks: [] });
+    expect(frames(back.sent, "task.start")).toHaveLength(0);
+  });
+});
+
+describe("holds of a member and the wire", () => {
+  const hold = async (memberId: string, machineId: string) =>
+    (
+      await f.db
+        .insert(schema.machineHolds)
+        .values({
+          orgId: f.org.id,
+          agentId: memberId,
+          machineId,
+          what: "The bot",
+          why: "answers customers",
+          until: new Date(Date.now() + 86_400_000),
+        })
+        .returning()
+    )[0] as typeof schema.machineHolds.$inferSelect;
+  const kept = (sent: ServerFrame[], op: string) =>
+    sent.flatMap((x) => (x.type === "request" && x.op === op ? [x] : []));
+
+  test("the computer's hello retakes a member's time hold as the lead's scope, and the member field never goes on the wire", async () => {
+    const { box, lead, member } = await crew();
+    await link(member.id, lead.id);
+    const row = await hold(member.id, box.machineId);
+    const runner = taskRunner(box.token);
+    await runner.hello({ holds: { live: [], ended: [] } });
+    for (let i = 0; i < 100 && kept(runner.sent, "keep.start").length === 0; i++) await Bun.sleep(10);
+    const [start] = kept(runner.sent, "keep.start");
+    expect(start).toMatchObject({ holdId: row.id });
+    expect(start?.agent).toEqual({ id: lead.id, handle: "ada", name: "Ada" });
+    expect(JSON.stringify(runner.sent)).not.toContain('"member"');
+    expect(JSON.stringify(runner.sent)).not.toContain(member.id);
+  });
+
+  test("releasing a hold when the resolver refuses (lead archived) still tells the lead's user, by the link", async () => {
+    const { box, lead, member } = await crew();
+    await link(member.id, lead.id);
+    const row = await hold(member.id, box.machineId);
+    const hub = f.machineHub as MachineHub;
+    const runner = taskRunner(box.token);
+    await runner.hello();
+    await archiveAgent(f.db, f.owner.id, f.org.id, lead.id, f.pubsub);
+    await releaseHold({ db: f.db, call: hub.call as never }, row, { reason: "stopped_by_person", userId: f.owner.id });
+    const [end] = kept(runner.sent, "keep.end");
+    expect(end).toMatchObject({ holdId: row.id, stop: true });
+    expect(end?.agent?.id).toBe(lead.id);
+    expect((await f.db.select().from(schema.machineHolds))[0]?.endReason).toBe("stopped_by_person");
+  });
+});
+
+describe("the link racing the lead's move", () => {
+  test("whichever lands first, the member ends on the lead's computer", async () => {
+    for (const linkFirst of [true, false]) {
+      const { lead, member } = await crew();
+      const newer = await pair(`New box ${linkFirst}`);
+      const jobs = linkFirst
+        ? [link(member.id, lead.id), setAgentComputerTarget(deps(), f.owner.id, f.org.id, lead.id, newer.machineId)]
+        : [setAgentComputerTarget(deps(), f.owner.id, f.org.id, lead.id, newer.machineId), link(member.id, lead.id)];
+      await Promise.allSettled(jobs);
+      const [m, l] = [await row(member.id), await row(lead.id)];
+      expect(l.machineId).toBe(newer.machineId);
+      if (m.worksOnAgentId) expect(m.machineId).toBe(l.machineId);
+      if (linkFirst) {
+        await f.machineHub?.stop();
+        await f.close();
+      }
+    }
   });
 });

@@ -15,6 +15,7 @@ import {
   codePrompt,
   codeStart,
   connectorGrantValidator,
+  createAgent,
   createApiKeyConnection,
   createGitToolSource,
   deleteMachine,
@@ -38,6 +39,7 @@ import {
   setAgentCoAuthor,
   setAgentComputerTarget,
   setAgentRepositories,
+  setWorksOn,
   setAgentScopes,
   type ToolContext,
   verifyGitToken,
@@ -323,6 +325,45 @@ describe("git on a connected machine through the proxy (ADR 0024 addendum)", () 
         session: { machineId: w.paired.machineId, cwd: "" },
       }),
     ).toBeNull();
+  });
+
+  test("a member's checkouts are updated in the lead's folder: the lead's scope on the computer, the member's own branches, the folder named", async () => {
+    const w = await world();
+    const deps = { db: f.db, pubsub: f.pubsub, publicUrl: PUBLIC_URL };
+    const lead = await createAgent(
+      f.db,
+      f.owner.id,
+      f.org.id,
+      { name: "Ada", handle: "ada", role: "Dev", credentialId: f.credential.id, ownerUserId: f.owner.id },
+      { model: "claude-sonnet-5-5" },
+    );
+    await f.db.update(schema.agents).set({ ownerUserId: f.owner.id }).where(eq(schema.agents.id, f.agent.id));
+    await setAgentComputerTarget(deps, f.owner.id, f.org.id, lead.id, w.paired.machineId);
+    await setWorksOn(deps, f.owner.id, f.org.id, f.agent.id, lead.id);
+    await setAgentRepositories(f.db, f.owner.id, f.org.id, f.agent.id, ["acme/app"]);
+    w.answers.fn = (req) =>
+      req.repos.map((r) => ({
+        repo: r.repo,
+        dir: r.dir,
+        path: `${FOLDER}/${r.dir}`,
+        status: "updated" as const,
+        defaultBranch: "main",
+      }));
+    const out = await prepareAgentCode(w.machineDeps, {
+      orgId: f.org.id,
+      agentId: f.agent.id,
+      threadRootId: null,
+      trigger: "bom dia",
+      messages: [{ content: "earlier" }],
+      session: { machineId: w.paired.machineId, cwd: "" },
+    });
+    const syncs = w.runner.syncs();
+    expect(syncs.length).toBeGreaterThan(0);
+    for (const sync of syncs) expect(sync.agent).toMatchObject({ id: lead.id, handle: "ada" });
+    expect(JSON.stringify(syncs)).not.toContain(f.agent.id);
+    // Its pushes are its own (the proxy checks the agent's handle): the branches carry the member's handle.
+    expect(out?.prompt).toContain("agentes/dev/<topic>");
+    expect(out?.prompt).toContain("Ada's folder");
   });
 
   test("before a chat turn: checkouts updated, the turn starts in the repository it is about, # Your code", async () => {
