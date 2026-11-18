@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { schema } from "@agenteschat/db";
 import {
   type Browser,
   browser,
@@ -55,7 +56,7 @@ async function scene() {
 }
 
 test("sets and clears it: 200 with the lead's id, agents list says who works on whom, repeated calls agree", async () => {
-  const { dev, nina, box, worksOn, listed } = await scene();
+  const { owner, api, dev, nina, box, worksOn, listed } = await scene();
   const set = await worksOn(dev, nina);
   expect(set.status).toBe(200);
   expect(await set.json()).toEqual({ worksOnAgentId: nina });
@@ -65,7 +66,11 @@ test("sets and clears it: 200 with the lead's id, agents list says who works on 
   const lead = rows.find((a) => a.id === nina);
   expect(member?.worksOnAgentId).toBe(nina);
   expect(member?.worksOn).toMatchObject({ id: nina, name: "Nina", handle: "nina" });
-  expect(member?.machineId).toBe(box.machineId);
+  const machineOf = async (agentId: string) =>
+    (
+      (await (await api(owner, "/machines")).json()) as { machines: { id: string; agents: { id: string }[] }[] }
+    ).machines.find((m) => m.agents.some((a) => a.id === agentId))?.id;
+  expect(await machineOf(dev)).toBe(box.machineId);
   expect(lead?.crew?.map((c) => c.id)).toEqual([dev]);
   expect(lead?.worksOnAgentId ?? null).toBeNull();
 
@@ -98,13 +103,19 @@ test("bad input: not a uuid and a missing field are 400, nobody is 404, itself i
 
 test("another workspace's agent is a 404, and a lead of another owner is refused", async () => {
   const { owner, dev, orgId, nina, worksOn, api } = await scene();
-  const other = (await (await owner("/api/app/organizations", { json: { name: "Other" } })).json()) as {
-    organization: { id: string };
-  };
-  const foreign = (await (
-    await owner(`/api/app/organizations/${other.organization.id}/agents`, { json: { name: "Zed", handle: "zed" } })
-  ).json()) as { id: string };
-  expect((await worksOn(dev, foreign.id)).status).toBe(404);
+  const [other] = await t.db.insert(schema.organizations).values({ name: "Other" }).returning();
+  const [foreign] = await t.db
+    .insert(schema.agents)
+    .values({
+      orgId: other?.id ?? "",
+      name: "Zed",
+      handle: "zed",
+      role: "x",
+      model: "claude-sonnet-5-5",
+      ownerUserId: null,
+    })
+    .returning();
+  expect((await worksOn(dev, foreign?.id)).status).toBe(404);
   const bob = await joinByInvitation(t, owner, orgId, "bob@example.com", { role: "admin" });
   const bobs = (await (await api(bob, "/agents", { json: { name: "Bobby", handle: "bobby" } })).json()) as {
     id: string;
@@ -127,16 +138,19 @@ test("who may: a member who doesn't manage the agent, a request from another ori
 });
 
 test("a linked member's own computer is locked (403), its lead's move takes it along, unlinking frees it", async () => {
-  const { owner, dev, nina, api, box, target, worksOn, listed } = await scene();
+  const { owner, dev, nina, api, box, target, worksOn } = await scene();
   const other = await pairComputer(t, (p, i) => api(owner, p, i), RUNNER, { name: "Other box", ip: "203.0.113.20" });
   await worksOn(dev, nina);
   expect((await target(dev, other.machineId)).status).toBe(403);
   expect((await target(dev, null)).status).toBe(403);
   expect((await target(nina, other.machineId)).status).toBe(200);
-  const rows = await listed();
-  expect(rows.find((a) => a.id === dev)?.machineId).toBe(other.machineId);
-  expect(rows.find((a) => a.id === nina)?.machineId).toBe(other.machineId);
-  expect(rows.find((a) => a.id === dev)?.machineId).not.toBe(box.machineId);
+  const machines = (
+    (await (await api(owner, "/machines")).json()) as { machines: { id: string; agents: { id: string }[] }[] }
+  ).machines;
+  const on = (id: string) => machines.find((m) => m.agents.some((a) => a.id === id))?.id;
+  expect(on(dev)).toBe(other.machineId);
+  expect(on(nina)).toBe(other.machineId);
+  expect(on(dev)).not.toBe(box.machineId);
   await worksOn(dev, null);
   expect((await target(dev, box.machineId)).status).toBe(200);
 });

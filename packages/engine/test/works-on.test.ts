@@ -1,24 +1,24 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { MACHINE_PROTOCOL_VERSION, type ServerFrame } from "@agenteschat/adapters";
 import { countQueries, eq, schema, sql } from "@agenteschat/db";
+import { systemText } from "@agenteschat/providers";
+import * as engine from "../src";
 import {
-  agentScopeFromDb,
   type AgentRun,
+  agentScopeFromDb,
   archiveAgent,
   buildRunContext,
   createAgent,
   createAgentRuns,
-  enableCaches,
-  insertMessage,
-  setAgentCoAuthor,
-  type ToolContext,
   deleteAgent,
   detachMachine,
+  enableCaches,
   ensureRightHand,
   ForbiddenError,
   getAgent,
   getAgentCached,
   grantScopes,
+  insertMessage,
   type MachineHub,
   MachineRequestError,
   machineAccessText,
@@ -28,15 +28,15 @@ import {
   NotFoundError,
   postPersonMessage,
   RIGHT_HAND,
+  setAgentCoAuthor,
   setAgentComputerTarget,
   setAgentHold,
   startMachineTask,
   stopOrgWork,
+  type ToolContext,
   unarchiveAgent,
   ValidationError,
 } from "../src";
-import { systemText } from "@agenteschat/providers";
-import * as engine from "../src";
 import { addMember, type Fixture, setup } from "./fixtures";
 import { fakeRunner, pairMachine } from "./machine-fixtures";
 
@@ -142,7 +142,15 @@ function taskRunner(token: string) {
     hello: () =>
       hub.message(
         conn,
-        JSON.stringify({ type: "hello", token, ...RUNNER, protocol: MACHINE_PROTOCOL_VERSION, exec: true }),
+        JSON.stringify({
+          type: "hello",
+          token,
+          ...RUNNER,
+          protocol: MACHINE_PROTOCOL_VERSION,
+          exec: true,
+          mode: "system",
+          executors: {},
+        }),
       ),
   };
 }
@@ -255,8 +263,18 @@ describe("setting it (P1, P2, P3)", () => {
     await link(member.id, lead.id);
     await link(member.id, null);
 
-    const other = await f.db.insert(schema.organizations).values({ name: "Other", slug: "other" }).returning();
-    const foreign = await addAgent("Zed", f.owner.id, other[0]?.id ?? "").catch(() => null);
+    const [other] = await f.db.insert(schema.organizations).values({ name: "Other" }).returning();
+    const [foreign] = await f.db
+      .insert(schema.agents)
+      .values({
+        orgId: other?.id ?? "",
+        name: "Zed",
+        handle: "zed",
+        role: "x",
+        model: "claude-sonnet-5-5",
+        ownerUserId: f.owner.id,
+      })
+      .returning();
     const archived = await addAgent("Old");
     await setAgentComputerTarget(deps(), f.owner.id, f.org.id, archived.id, box.machineId);
     await archiveAgent(f.db, f.owner.id, f.org.id, archived.id);
@@ -301,7 +319,9 @@ describe("setting it (P1, P2, P3)", () => {
     await link(member.id, lead.id);
     // At the limit: a second member under the same lead is fine.
     await link(third.id, lead.id);
-    expect((await membersOf(f.db, f.org.id, lead.id)).map((m) => m.id).sort()).toEqual([member.id, third.id].sort());
+    expect((await membersOf(f.db, f.org.id, lead.id)).map((m: { id: string }) => m.id).sort()).toEqual(
+      [member.id, third.id].sort(),
+    );
     // One past it: a member as lead (L → M → X), and a lead as member (L → X).
     const x = await addAgent("Xi");
     await setAgentComputerTarget(deps(), f.owner.id, f.org.id, x.id, box.machineId);
@@ -416,12 +436,10 @@ describe("placement (T4, T7)", () => {
     for (const id of [lead.id, member.id, third.id]) expect((await row(id)).machineId).toBe(newer.machineId);
     expect((await row(member.id)).brainAccountId).toBeNull();
     expect((await row(member.id)).worksOnAgentId).toBe(lead.id);
-    const audits = await f.db.select().from(schema.auditLog).where(eq(schema.auditLog.action, "agent.computer_target"));
-    const before = audits.length;
+    // Moving it to where it is changes nothing for anyone.
     await setAgentComputerTarget(deps(), f.owner.id, f.org.id, lead.id, newer.machineId);
-    expect(
-      await f.db.select().from(schema.auditLog).where(eq(schema.auditLog.action, "agent.computer_target")),
-    ).toHaveLength(before);
+    for (const id of [lead.id, member.id, third.id]) expect((await row(id)).machineId).toBe(newer.machineId);
+    expect((await row(member.id)).worksOnAgentId).toBe(lead.id);
   });
 
   test("the lead's move to no computer takes the members to none too", async () => {
@@ -584,10 +602,17 @@ describe("the resolver (T1, T7, P2, P3, P4)", () => {
     expect((await refusal(scopeOf(member.id, box.machineId))).message).toContain("Ada");
     await set(lead.id, null);
     // Another workspace's agent.
-    const [org2] = await f.db.insert(schema.organizations).values({ name: "Other", slug: "other-2" }).returning();
+    const [org2] = await f.db.insert(schema.organizations).values({ name: "Other" }).returning();
     const [alien] = await f.db
       .insert(schema.agents)
-      .values({ orgId: org2?.id ?? "", name: "Alien", handle: "alien", role: "x", ownerUserId: f.owner.id })
+      .values({
+        orgId: org2?.id ?? "",
+        name: "Alien",
+        handle: "alien",
+        role: "x",
+        model: "claude-sonnet-5-5",
+        ownerUserId: f.owner.id,
+      })
       .returning();
     // The composite key may refuse the row itself; if it lets it in, the resolver refuses it.
     const forged = await set(member.id, alien?.id ?? null).then(
@@ -629,7 +654,7 @@ describe("the resolver (T1, T7, P2, P3, P4)", () => {
     const idx = await f.db.execute(
       sql`select indexname from pg_indexes where tablename = 'agents' and indexdef ilike '%works_on_agent_id%'`,
     );
-    expect(idx.rows.length).toBeGreaterThan(0);
+    expect((idx as { rows: unknown[] }).rows.length).toBeGreaterThan(0);
     await link(member.id, lead.id);
     await archiveAgent(f.db, f.owner.id, f.org.id, member.id);
     const x = await addAgent("Xi");
@@ -842,7 +867,13 @@ describe("standing and lifecycle (T9)", () => {
     await link(member.id, lead.id);
     const theirs = await task(box.machineId, member, lead.id);
     const mine = await task(box.machineId, lead, lead.id);
-    await stopOrgWork({ db: f.db, pubsub: f.pubsub, hub: f.machineHub }, f.org.id, "stopped", "deleted", member.id);
+    await stopOrgWork(
+      { db: f.db, pubsub: f.pubsub, hub: f.machineHub as MachineHub },
+      f.org.id,
+      "stopped",
+      "deleted",
+      member.id,
+    );
     const cancels = runner.sent.flatMap((x) => (x.type === "request" && x.op === "task.cancel" ? [x] : []));
     // Its task is cancelled on the lead's scope (that is where it runs); the lead's own is left alone.
     expect(cancels.map((c) => c.taskId)).toEqual([theirs]);
@@ -912,8 +943,9 @@ describe("standing and lifecycle (T9)", () => {
     const kept = await t.call("keep_running", { what: "bot", why: "answers customers", pid: 4242 });
     expect(kept.isError).toBeFalsy();
     asLead(frames("keep.start")[0]);
-    const holdId = (frames("keep.start")[0] as { holdId?: string } | undefined)?.holdId;
-    await t.call("keep_running", { end: holdId });
+    const [hold] = await f.db.select().from(schema.machineHolds);
+    expect(hold?.agentId).toBe(member.id);
+    await t.call("keep_running", { end: hold?.id });
     asLead(frames("keep.end")[0]);
     expect(
       runner.sent.filter((x) => x.type === "request").every((x) => x.type !== "request" || x.agent?.id !== member.id),
@@ -1040,27 +1072,14 @@ describe("the rest of the class (F10-F16)", () => {
     expect((await refusal(scopeOf(member.id, newer.machineId))).message).toContain("Ada");
   });
 
-  test("switching the AI account of a linked member to another computer names its lead", async () => {
+  test("the computer move an AI-account switch makes for a linked member (settings-proposals) names its lead and changes nothing", async () => {
     const { lead, member } = await crew();
     await link(member.id, lead.id);
     const other = await pair("Other box");
-    const [acc] = await f.db
-      .insert(schema.machineAccounts)
-      .values({
-        id: crypto.randomUUID(),
-        orgId: f.org.id,
-        machineId: other.machineId,
-        kind: "claude_code",
-        label: "x",
-        status: "active",
-        createdBy: f.owner.id,
-      })
-      .returning();
     const e = await refusal(
-      engine.applySettings({ db: f.db, pubsub: f.pubsub } as never, f.owner.id, f.org.id, member.id, [
-        { key: "ai_account", value: { brain: "claude_code", accountId: acc?.id } },
-      ] as never),
+      setAgentComputerTarget(deps(), f.owner.id, f.org.id, member.id, other.machineId, { wakeWaits: false }),
     );
+    expect(e).toBeInstanceOf(ForbiddenError);
     expect(e.message).toContain("Ada");
     expect((await row(member.id)).machineId).toBe((await row(lead.id)).machineId);
   });

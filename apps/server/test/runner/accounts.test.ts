@@ -12,7 +12,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import * as accountsModule from "../../runner/accounts";
 import {
   accountCodeAad,
   CLAUDE_AUTH_PROTOCOL,
@@ -23,6 +22,7 @@ import {
   parseRunnerFrame,
 } from "@agenteschat/adapters/machine-protocol";
 import { sealSecret } from "@agenteschat/adapters/secret-box";
+import * as accountsModule from "../../runner/accounts";
 import {
   AccountManager,
   type AccountManagerOptions,
