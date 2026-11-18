@@ -878,6 +878,14 @@ export interface ForeignMailbox {
   ownerName: string | null;
 }
 
+/** An agent another one is linked to or from (ADR 0202). */
+export interface AgentRef {
+  id: string;
+  name: string;
+  handle: string;
+  archived: boolean;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -926,9 +934,10 @@ export interface Agent {
   reportsToAgentId?: string | null;
   /** Works on the computer of (ADR 0202): the agent whose computer it uses; null or absent = its own. */
   worksOnAgentId?: string | null;
-  /** In the agents list: the agent it works on, and the live agents working on its computer. */
-  worksOn?: { id: string; name: string; handle: string } | null;
-  crew?: { id: string; name: string; handle: string }[];
+  /** In the agents list: the agent it works on, even when that one is archived (the apps never take its name from the live list). */
+  worksOn?: AgentRef | null;
+  /** In the agents list: every agent linked to this one, archived ones included; empty for an agent with none. */
+  crew?: AgentRef[];
   /** No longer in the team (ADR 0082): only its name, role and look, from `FormerAgent`. */
   former?: "archived" | "deleted";
   /**
@@ -4987,7 +4996,7 @@ export interface Machine {
   /** `false`: started with `--no-exec` (files and uploads only). */
   execAllowed: boolean;
   pairedBy: { id: string; name: string } | null;
-  agents: { id: string; name: string; handle: string; worksOnAgentId?: string | null }[];
+  agents: { id: string; name: string; handle: string }[];
   /**
    * The built-in agent's id where this computer holds its shared place (ADR 0175) and this person may open it, as
    * they may any agent's computer here; null or absent otherwise.

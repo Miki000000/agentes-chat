@@ -1,6 +1,6 @@
 import { useAgents, useMachines, useSetWorksOn } from "@agenteschat/client";
 import { managesAgent } from "@agenteschat/client/lib/audience";
-import { type WorksOnAgent, worksOnCrewShown, worksOnField } from "@agenteschat/client/lib/works-on";
+import { worksOnAgents, worksOnCrewShown, worksOnField } from "@agenteschat/client/lib/works-on";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { GroupedFooter, GroupedHeader, GroupedList, GroupedRow, useToast } from "@/ui";
@@ -37,17 +37,9 @@ export function WorksOnSection({ agentId }: { agentId: string }) {
   });
   useEffect(() => () => closeAgentChoose(), []);
   const agent = agents?.find((a) => a.id === agentId);
-  if (!agents || !agent || !managesAgent(agent)) return null;
-  const known: WorksOnAgent[] = agents.map((a) => ({
-    id: a.id,
-    name: a.name,
-    handle: a.handle,
-    ownerUserId: a.ownerUserId ?? null,
-    machineId: machines?.find((m) => m.agents.some((x) => x.id === a.id))?.id ?? null,
-    archivedAt: null,
-    builtin: a.builtin ?? null,
-    worksOnAgentId: a.worksOnAgentId ?? null,
-  }));
+  // Nothing until both lists are in: never "nobody has a computer" while loading or on error.
+  if (!agents || !machines || !agent || !managesAgent(agent)) return null;
+  const known = worksOnAgents(agents, machines);
   const me = known.find((a) => a.id === agentId);
   if (!me) return null;
   const field = worksOnField(me, known);
@@ -66,13 +58,15 @@ export function WorksOnSection({ agentId }: { agentId: string }) {
     );
   }
   const lead = field.kind === "member" ? field.lead : null;
+  const unavailable = field.kind === "member" && !field.available;
   const choose = () => {
-    const choices = field.kind === "pick" ? field.options : lead ? [lead] : [];
+    // An archived lead is no row to pick: the choice is to stop.
+    const choices = field.kind === "pick" ? field.options : lead && !unavailable ? [lead] : [];
     openAgentChoose({
       title: t("worksOn.label"),
       ids: choices.map((a) => a.id),
-      picked: lead ? [lead.id] : [],
-      none: t("worksOn.none"),
+      picked: lead && !unavailable ? [lead.id] : [],
+      none: unavailable && lead ? t("worksOn.stop", { name: lead.name }) : t("worksOn.none"),
       note: t("worksOn.tradeoff"),
       apply: ([to]) => {
         if ((to ?? null) !== (lead?.id ?? null)) latest.current(to ?? null);
@@ -96,7 +90,7 @@ export function WorksOnSection({ agentId }: { agentId: string }) {
         />
       </GroupedList>
       <GroupedFooter>
-        {field.kind === "member" && !lead ? t("worksOn.unavailable", { name: "" }) : t("worksOn.tradeoff")}
+        {unavailable && lead ? t("worksOn.unavailable", { name: lead.name }) : t("worksOn.tradeoff")}
       </GroupedFooter>
     </>
   );

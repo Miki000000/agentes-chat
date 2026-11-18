@@ -7,6 +7,7 @@ import {
   useSetComputerTarget,
   useSetWorksOn,
 } from "@agenteschat/client";
+import { managesAgent } from "@agenteschat/client/lib/audience";
 import {
   type NoComputer,
   noComputerChoice,
@@ -26,7 +27,7 @@ import {
   machineTitle,
 } from "@agenteschat/client/lib/machines";
 import { can } from "@agenteschat/client/lib/permissions";
-import { type WorksOnAgent, worksOnCrewShown, worksOnField } from "@agenteschat/client/lib/works-on";
+import { worksOnAgents, worksOnCrewShown, worksOnField } from "@agenteschat/client/lib/works-on";
 import { modeKey } from "@agenteschat/client/lib/workspace-mode";
 import {
   Card,
@@ -203,20 +204,13 @@ function WorksOnField({ agent }: { agent: Agent }) {
   const agents = useAgents(org.id).data;
   const machines = useMachines(org.id).data;
   const setWorksOn = useSetWorksOn(org.id);
-  if (!agents) return null;
-  const known: WorksOnAgent[] = agents.map((a) => ({
-    id: a.id,
-    name: a.name,
-    handle: a.handle,
-    ownerUserId: a.ownerUserId ?? null,
-    machineId: machines?.find((m) => m.agents.some((x) => x.id === a.id))?.id ?? null,
-    archivedAt: null,
-    builtin: a.builtin ?? null,
-    worksOnAgentId: a.worksOnAgentId ?? null,
-  }));
-  const me = known.find((a) => a.id === agent.id);
-  if (!me) return null;
-  const field = worksOnField(me, known);
+  const me = agents?.find((x) => x.id === agent.id);
+  // Nothing until both lists are in (and for someone who can't manage it): never "nobody has a computer" meanwhile.
+  if (!agents || !machines || !me || !managesAgent(me)) return null;
+  const known = worksOnAgents(agents, machines);
+  const mine = known.find((x) => x.id === agent.id);
+  if (!mine) return null;
+  const field = worksOnField(mine, known);
   if (field.kind === "none") return null;
   const id = `works-on-${agent.id}`;
   const set = (worksOnAgentId: string | null) =>
@@ -243,6 +237,8 @@ function WorksOnField({ agent }: { agent: Agent }) {
     );
   }
   const lead = field.kind === "member" ? field.lead : null;
+  const unavailable = field.kind === "member" && !field.available;
+  // The lead stays a choice only while it can be followed; otherwise the way out is to stop.
   const choices = field.kind === "pick" ? field.options : lead ? [lead] : [];
   const options = choices.map((a) => ({
     value: a.id,
@@ -261,22 +257,20 @@ function WorksOnField({ agent }: { agent: Agent }) {
         <span className="stack-4" style={{ gap: 6 }}>
           <Select
             id={id}
-            value={lead?.id ?? OWN_COMPUTER}
+            value={mine.worksOnAgentId ?? OWN_COMPUTER}
             disabled={setWorksOn.isPending}
-            onValueChange={(v) => set(v || null)}
+            onValueChange={(v) => v !== (mine.worksOnAgentId ?? OWN_COMPUTER) && set(v || null)}
             options={[
               {
                 value: OWN_COMPUTER,
-                label: t("worksOn.none"),
+                label: unavailable && lead ? t("worksOn.stop", { name: lead.name }) : t("worksOn.none"),
                 leading: <ComputerIcon kind={WORKSPACE_COMPUTER_KIND} size={16} />,
               },
               ...options,
             ]}
           />
-          {field.kind === "member" && !lead && (
-            <span className="small muted">{t("worksOn.unavailable", { name: "" })}</span>
-          )}
-          <span className="small muted">{t("worksOn.tradeoff")}</span>
+          {unavailable && lead && <span className="small muted">{t("worksOn.unavailable", { name: lead.name })}</span>}
+          {field.kind === "member" && <span className="small muted">{t("worksOn.tradeoff")}</span>}
         </span>
       )}
     </Field>

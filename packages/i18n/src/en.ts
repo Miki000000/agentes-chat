@@ -12493,6 +12493,7 @@ export const en = {
     hint: "It uses that agent's computer as that agent does there. It stays its own agent everywhere else.",
     none: "Its own computer",
     locked: "Follows {{name}}",
+    stop: "Stop working on {{name}}'s computer",
     crewTitle: "Work on this computer",
     crewEmpty: "No other agent works on this computer.",
     crewMore: "and {{count}} more",
@@ -12500,7 +12501,7 @@ export const en = {
     unavailable:
       "{{name}} can't share its computer now: it is archived, has another owner or moved. Choose another or stop.",
     tradeoff:
-      "On that computer it can do what that agent can: use its files, its sign-ins and the programs it runs. Its own AI sign-in, memory and name stay its own, and approvals for sensitive actions still go to people.",
+      "On that computer it can do what that agent can: use its files, its sign-ins and the programs it runs. Its own AI sign-in is also kept available on that computer's user. Its memory and name stay its own, and approvals for sensitive actions still go to people.",
   },
   computer: {
     title: "{{name}}'s PC",
@@ -16847,6 +16848,7 @@ export const en = {
         not_found: "no longer used this computer",
         brain_unavailable: "the new computer doesn't have its Claude Code or Codex",
         forbidden: "you can't change this agent",
+        works_on: "it works on another agent's computer, so it stays with that agent",
       },
     },
     card: {

@@ -12501,6 +12501,7 @@ export const ptBR = {
     hint: "Usa o computador desse agente como ele usa lá. Continua sendo o próprio agente em todo o resto.",
     none: "O próprio computador",
     locked: "Acompanha {{name}}",
+    stop: "Parar de trabalhar no computador de {{name}}",
     crewTitle: "Trabalham neste computador",
     crewEmpty: "Nenhum outro agente trabalha neste computador.",
     crewMore: "e mais {{count}}",
@@ -12508,7 +12509,7 @@ export const ptBR = {
     unavailable:
       "{{name}} não pode compartilhar o computador agora: está arquivado, tem outro dono ou mudou de computador. Escolha outro ou pare.",
     tradeoff:
-      "Nesse computador ele faz o que esse agente faz: usa os arquivos, as contas e os programas que ele roda. A própria conta de IA, a memória e o nome continuam dele, e as aprovações de ações sensíveis continuam indo para as pessoas.",
+      "Nesse computador ele faz o que esse agente faz: usa os arquivos, as contas e os programas que ele roda. A própria conta de IA também fica disponível no usuário desse computador. A memória e o nome continuam dele, e as aprovações de ações sensíveis continuam indo para as pessoas.",
   },
   computer: {
     title: "PC do {{name}}",
@@ -16742,6 +16743,7 @@ export const ptBR = {
         not_found: "já não usava este computador",
         brain_unavailable: "o novo computador não tem o Claude Code ou o Codex dele",
         forbidden: "você não pode mudar este agente",
+        works_on: "ele trabalha no computador de outro agente, então fica com esse agente",
       },
     },
     card: {
