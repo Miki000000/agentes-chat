@@ -924,6 +924,11 @@ export interface Agent {
   builtin?: "right_hand" | null;
   /** Responde a (ADR 0148 addendum): the agent it reports to; null or absent = its owner, else its setor's lead. */
   reportsToAgentId?: string | null;
+  /** Works on the computer of (ADR 0202): the agent whose computer it uses; null or absent = its own. */
+  worksOnAgentId?: string | null;
+  /** In the agents list: the agent it works on, and the live agents working on its computer. */
+  worksOn?: { id: string; name: string; handle: string } | null;
+  crew?: { id: string; name: string; handle: string }[];
   /** No longer in the team (ADR 0082): only its name, role and look, from `FormerAgent`. */
   former?: "archived" | "deleted";
   /**
@@ -4982,7 +4987,7 @@ export interface Machine {
   /** `false`: started with `--no-exec` (files and uploads only). */
   execAllowed: boolean;
   pairedBy: { id: string; name: string } | null;
-  agents: { id: string; name: string; handle: string }[];
+  agents: { id: string; name: string; handle: string; worksOnAgentId?: string | null }[];
   /**
    * The built-in agent's id where this computer holds its shared place (ADR 0175) and this person may open it, as
    * they may any agent's computer here; null or absent otherwise.

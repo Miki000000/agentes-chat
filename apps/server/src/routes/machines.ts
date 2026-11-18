@@ -34,6 +34,7 @@ import {
   safeEqual,
   setAgentComputerTarget,
   setMachinePause,
+  setWorksOn,
   startDeviceCode,
   startLinkedDeviceCode,
   syncHostComputer,
@@ -180,7 +181,9 @@ export const Machine = z
         "Its app takes a pause from here (`POST …/pause`); `false`: update the app on it. Never the workspace's own computer.",
     }),
     pairedBy: z.object({ id: z.string(), name: z.string() }).nullable(),
-    agents: z.array(z.object({ id: z.uuid(), name: z.string(), handle: z.string() })),
+    agents: z.array(
+      z.object({ id: z.uuid(), name: z.string(), handle: z.string(), worksOnAgentId: z.uuid().nullable().optional() }),
+    ),
     sharedSeatOf: z.uuid().nullable().optional().openapi({
       description:
         "The built-in agent's id where this computer holds its shared place (the one it uses in channels, widgets and routines that report outside a person's own conversation) and this person may open it, as they may any agent's computer here. Opened with `seat=shared` on that agent's desktop routes.",
@@ -444,7 +447,7 @@ const MoveAgentsResult = z
   .object({
     moved: z.array(z.uuid()),
     skipped: z.array(
-      z.object({ agentId: z.string(), reason: z.enum(["brain_unavailable", "forbidden", "not_found"]) }),
+      z.object({ agentId: z.string(), reason: z.enum(["brain_unavailable", "forbidden", "not_found", "works_on"]) }),
     ),
     resumed: z.number().int().openapi({ description: "Waiting runs queued again on the new computer." }),
     stillWaiting: z.number().int().openapi({
@@ -1013,6 +1016,30 @@ export function machineAppRoutes(deps: AppDeps) {
         c.req.valid("json").machineId,
       );
       return c.json(target, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "put",
+      path: "/organizations/{orgId}/agents/{agentId}/works-on",
+      tags,
+      security,
+      summary:
+        "Works on the computer of another agent (ADR 0202): uses its computer as it does there; null to stop. Who owns or manages both",
+      request: { params: AgentParams, body: body(z.object({ worksOnAgentId: z.uuid().nullable() })) },
+      responses: { 200: json(z.object({ worksOnAgentId: z.uuid().nullable() })), ...errors },
+    }),
+    async (c) => {
+      const { orgId, agentId } = c.req.valid("param");
+      const out = await setWorksOn(
+        { db, pubsub },
+        c.get("user").id,
+        orgId,
+        agentId,
+        c.req.valid("json").worksOnAgentId,
+      );
+      return c.json(out, 200);
     },
   );
 

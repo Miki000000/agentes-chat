@@ -1,5 +1,12 @@
 import type { Agent, ComputerTarget, Machine } from "@agenteschat/client";
-import { useAgents, useComputer, useComputerSetup, useMachines, useSetComputerTarget } from "@agenteschat/client";
+import {
+  useAgents,
+  useComputer,
+  useComputerSetup,
+  useMachines,
+  useSetComputerTarget,
+  useSetWorksOn,
+} from "@agenteschat/client";
 import {
   type NoComputer,
   noComputerChoice,
@@ -19,12 +26,14 @@ import {
   machineTitle,
 } from "@agenteschat/client/lib/machines";
 import { can } from "@agenteschat/client/lib/permissions";
+import { type WorksOnAgent, worksOnCrewShown, worksOnField } from "@agenteschat/client/lib/works-on";
 import { modeKey } from "@agenteschat/client/lib/workspace-mode";
 import {
   Card,
   CardHeader,
   ComputerIcon,
   ComputerPortrait,
+  Field,
   Icon,
   InfoHint,
   List,
@@ -172,8 +181,105 @@ export function AgentComputerPanel({ agent, machineNote }: { agent: Agent; machi
           {machineNote}
         </div>
       )}
+      <WorksOnField agent={agent} />
       {target.kind === "machine" && <AgentMachineFolders agent={agent} machineId={target.machineId} />}
     </div>
+  );
+}
+
+const OWN_COMPUTER = "";
+/** How many agents working on a computer its owner's panel names before "and N more". */
+const CREW_SHOWN = 5;
+
+/**
+ * "Trabalha no computador de" (ADR 0202): the agent whose computer this one uses, and for an agent with others on its
+ * computer, who they are. Picked and applied at once. The words say plainly what it gives (never "lead": that word is a
+ * setor's person, ADR 0083). Nothing for the right hand.
+ */
+function WorksOnField({ agent }: { agent: Agent }) {
+  const { t } = useTranslation();
+  const { org } = useOrg();
+  const toast = useToast();
+  const agents = useAgents(org.id).data;
+  const machines = useMachines(org.id).data;
+  const setWorksOn = useSetWorksOn(org.id);
+  if (!agents) return null;
+  const known: WorksOnAgent[] = agents.map((a) => ({
+    id: a.id,
+    name: a.name,
+    handle: a.handle,
+    ownerUserId: a.ownerUserId ?? null,
+    machineId: machines?.find((m) => m.agents.some((x) => x.id === a.id))?.id ?? null,
+    archivedAt: null,
+    builtin: a.builtin ?? null,
+    worksOnAgentId: a.worksOnAgentId ?? null,
+  }));
+  const me = known.find((a) => a.id === agent.id);
+  if (!me) return null;
+  const field = worksOnField(me, known);
+  if (field.kind === "none") return null;
+  const id = `works-on-${agent.id}`;
+  const set = (worksOnAgentId: string | null) =>
+    setWorksOn.mutate({ agentId: agent.id, worksOnAgentId }, { onError: (e) => toast.show(errorText(t, e), "error") });
+  if (field.kind === "lead") {
+    const { shown, more } = worksOnCrewShown(field.crew, CREW_SHOWN);
+    return (
+      <div className="stack-4" style={{ gap: 6 }}>
+        <span className="newag__label">{t("worksOn.crewTitle")}</span>
+        {shown.length === 0 ? (
+          <span className="small muted">{t("worksOn.crewEmpty")}</span>
+        ) : (
+          <ul className="agent-folders">
+            {shown.map((a) => (
+              <li key={a.id}>
+                <AgentAvatar agentId={a.id} name={a.name} size="sm" />
+                <span className="machine-folder__name">{a.name}</span>
+              </li>
+            ))}
+            {more > 0 && <li className="small muted">{t("worksOn.crewMore", { count: more })}</li>}
+          </ul>
+        )}
+      </div>
+    );
+  }
+  const lead = field.kind === "member" ? field.lead : null;
+  const choices = field.kind === "pick" ? field.options : lead ? [lead] : [];
+  const options = choices.map((a) => ({
+    value: a.id,
+    label: a.name,
+    leading: <AgentAvatar agentId={a.id} name={a.name} size="sm" />,
+  }));
+  return (
+    <Field
+      label={t("worksOn.label")}
+      id={id}
+      hint={{ name: t("common.about", { label: t("worksOn.label") }), text: t("worksOn.hint") }}
+    >
+      {field.kind === "empty" ? (
+        <span className="small muted">{t("worksOn.noneEligible")}</span>
+      ) : (
+        <span className="stack-4" style={{ gap: 6 }}>
+          <Select
+            id={id}
+            value={lead?.id ?? OWN_COMPUTER}
+            disabled={setWorksOn.isPending}
+            onValueChange={(v) => set(v || null)}
+            options={[
+              {
+                value: OWN_COMPUTER,
+                label: t("worksOn.none"),
+                leading: <ComputerIcon kind={WORKSPACE_COMPUTER_KIND} size={16} />,
+              },
+              ...options,
+            ]}
+          />
+          {field.kind === "member" && !lead && (
+            <span className="small muted">{t("worksOn.unavailable", { name: "" })}</span>
+          )}
+          <span className="small muted">{t("worksOn.tradeoff")}</span>
+        </span>
+      )}
+    </Field>
   );
 }
 
@@ -284,7 +390,9 @@ function AgentComputerRow({
   const value = current?.id ?? NO_COMPUTER;
   const none = noComputer.choice(value === NO_COMPUTER);
   const choices = machines.filter((m) => admin || m.pairedBy?.id === me.user.id || m.id === value);
-  const canPick = (admin || agent.ownerUserId === me.user.id) && choices.length > 0;
+  // It works on another agent's computer (ADR 0202): it goes where that agent goes, so its own picker is locked.
+  const followed = agent.worksOnAgentId ? (agent.worksOn?.name ?? "") : null;
+  const canPick = followed === null && (admin || agent.ownerUserId === me.user.id) && choices.length > 0;
   const iconOf = (id: string) =>
     id === NO_COMPUTER && none ? (
       <NoComputerIcon choice={none} />
@@ -348,6 +456,7 @@ function AgentComputerRow({
         <span className="computers-agent__value computers-agent__value--ro">
           {iconOf(value)}
           {nameOf(value)}
+          {followed !== null && <span className="small muted"> · {t("worksOn.locked", { name: followed })}</span>}
         </span>
       )}
     </div>

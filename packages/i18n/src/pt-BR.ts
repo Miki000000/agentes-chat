@@ -12495,6 +12495,21 @@ export const ptBR = {
       saved: "Modelo: {{model}}",
     },
   },
+  /** "Works on the computer of" (ADR 0202): the agent's field in Configurações › Computador, on web and phone. */
+  worksOn: {
+    label: "Trabalha no computador de",
+    hint: "Usa o computador desse agente como ele usa lá. Continua sendo o próprio agente em todo o resto.",
+    none: "O próprio computador",
+    locked: "Acompanha {{name}}",
+    crewTitle: "Trabalham neste computador",
+    crewEmpty: "Nenhum outro agente trabalha neste computador.",
+    crewMore: "e mais {{count}}",
+    noneEligible: "Nenhum agente seu tem um computador para compartilhar.",
+    unavailable:
+      "{{name}} não pode compartilhar o computador agora: está arquivado, tem outro dono ou mudou de computador. Escolha outro ou pare.",
+    tradeoff:
+      "Nesse computador ele faz o que esse agente faz: usa os arquivos, as contas e os programas que ele roda. A própria conta de IA, a memória e o nome continuam dele, e as aprovações de ações sensíveis continuam indo para as pessoas.",
+  },
   computer: {
     title: "PC do {{name}}",
     title_female: "PC da {{name}}",

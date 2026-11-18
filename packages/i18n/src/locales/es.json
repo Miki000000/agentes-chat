@@ -12474,6 +12474,18 @@
       "saved": "Modelo: {{model}}"
     }
   },
+  "worksOn": {
+    "label": "Trabaja en el ordenador de",
+    "hint": "Usa el ordenador de ese agente como lo usa él allí. En todo lo demás sigue siendo su propio agente.",
+    "none": "Su propio ordenador",
+    "locked": "Sigue a {{name}}",
+    "crewTitle": "Trabajan en este ordenador",
+    "crewEmpty": "Ningún otro agente trabaja en este ordenador.",
+    "crewMore": "y {{count}} más",
+    "noneEligible": "Ningún agente tuyo tiene un ordenador que compartir.",
+    "unavailable": "{{name}} no puede compartir su ordenador ahora: está archivado, tiene otro dueño o se movió. Elige otro o déjalo.",
+    "tradeoff": "En ese ordenador puede hacer lo que hace ese agente: usar sus archivos, sus inicios de sesión y los programas que ejecuta. Su propia cuenta de IA, su memoria y su nombre siguen siendo suyos, y las aprobaciones de acciones sensibles siguen yendo a las personas."
+  },
   "computer": {
     "title": "PC de {{name}}",
     "title_female": "PC de {{name}}",

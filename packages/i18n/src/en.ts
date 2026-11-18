@@ -12487,6 +12487,21 @@ export const en = {
       saved: "Model: {{model}}",
     },
   },
+  /** "Works on the computer of" (ADR 0202): the agent's field in Configurações › Computador, on web and phone. */
+  worksOn: {
+    label: "Works on the computer of",
+    hint: "It uses that agent's computer as that agent does there. It stays its own agent everywhere else.",
+    none: "Its own computer",
+    locked: "Follows {{name}}",
+    crewTitle: "Work on this computer",
+    crewEmpty: "No other agent works on this computer.",
+    crewMore: "and {{count}} more",
+    noneEligible: "No agent of yours has a computer to share.",
+    unavailable:
+      "{{name}} can't share its computer now: it is archived, has another owner or moved. Choose another or stop.",
+    tradeoff:
+      "On that computer it can do what that agent can: use its files, its sign-ins and the programs it runs. Its own AI sign-in, memory and name stay its own, and approvals for sensitive actions still go to people.",
+  },
   computer: {
     title: "{{name}}'s PC",
     machineHint: "Whoever connected this computer turns it on, off and pauses it on the computer itself.",
