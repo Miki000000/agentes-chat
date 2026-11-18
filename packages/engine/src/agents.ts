@@ -62,6 +62,7 @@ import {
 } from "./tools/scopes";
 import { orgDefaultAgentBudget, resyncBudgetCounter } from "./usage";
 import { resumeBudgetWaits, wakeAgentsBrainWaits } from "./usage-pause";
+import { stopMembersWork } from "./works-on";
 import { workspaceApprovalsLevel } from "./workspace-approvals";
 import { isPersonalWorkspace } from "./workspace-mode";
 
@@ -794,7 +795,7 @@ export async function editAgent(
 }
 
 /** What this process keeps of an agent and of what names it: the agent, the team, the archived, old handles, channels. */
-function forgetAgentCaches(orgId: string, agentId: string) {
+export function forgetAgentCaches(orgId: string, agentId: string) {
   caches.agents.delete(`${orgId}:${agentId}`);
   caches.agents.delete(`${orgId}:team`);
   caches.agents.delete(`${orgId}:archived`);
@@ -810,6 +811,8 @@ export async function archiveAgent(
   pubsub?: PubSub,
   /** The caller already checked who may (the right hand's Desfazer, ADR 0139: the person it created it for). */
   checked = false,
+  /** The computers' hub: the work of the agents on this one's computer stops there too (ADR 0202). */
+  hub?: Parameters<typeof stopMembersWork>[0]["hub"],
 ) {
   if (!checked) await requireAgentManager(db, actorId, orgId, agentId);
   await refuseRightHand(db, orgId, agentId, "archived");
@@ -832,6 +835,8 @@ export async function archiveAgent(
     // It leaves every task it was on (ADR 0188): an archived agent answers no task's conversation and starts no work.
     const { unassignGone } = await import("./issues");
     await unassignGone({ db, pubsub }, orgId, { type: "agent", id: agentId }).catch(() => null);
+    // The agents working on its computer run under its OS user: they stop with it, and are refused while it is archived.
+    await stopMembersWork({ db, pubsub, hub }, orgId, agentId).catch(() => null);
   }
   // Its channel memberships stay: what runs read of a channel's members leaves it out from now on.
   forgetAgentCaches(orgId, agentId);
@@ -938,6 +943,8 @@ export const agentView = (a: Agent) => ({
   builtin: a.builtin ?? null,
   /** "Responde a" (ADR 0148 addendum): the agent it reports to; null = its owner, else its setor's lead. */
   reportsToAgentId: a.reportsToAgentId ?? null,
+  /** "Works on the computer of" (ADR 0202): the agent whose computer it uses; null = its own. */
+  worksOnAgentId: a.worksOnAgentId ?? null,
   /** Its setup checklist (ADR 0155 §2): the role it started from and the steps confirmed; null = none. */
   setup: setupOf(a.setup),
   /** Its autonomy brakes (ADR 0131), with the defaults filled in. */

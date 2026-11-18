@@ -9,6 +9,7 @@ import { isRightHand, isRightHandId, RIGHT_HAND, soleReader } from "./right-hand
 import { SANDBOX_SCOPE } from "./sandbox-scope";
 import { grantedScopeKeys, grantKey } from "./tools/scopes";
 import type { ToolContext } from "./tools/types";
+import { agentScopeOn, worksOnScope } from "./works-on";
 
 const { agents, organizationMembers, rightHandSeats, users } = schema;
 
@@ -387,6 +388,8 @@ export async function machineScope(
 ): Promise<AgentScope> {
   const agent = await getAgentCached(ctx.db, ctx.orgId, ctx.agentId);
   if (!isRightHand(agent)) {
+    // An agent that works on another's computer is that agent's there (ADR 0202); any other is itself.
+    if (agent?.worksOnAgentId) return worksOnScope(ctx.db, agent, machineId);
     return { id: ctx.agentId, handle: agent?.handle ?? "agent", ...(agent?.name ? { name: agent.name } : {}) };
   }
   const owner =
@@ -461,7 +464,11 @@ export async function viewerScope(
     .where(and(eq(agents.orgId, orgId), eq(agents.id, agentId)));
   if (!agent) return null;
   if (!isRightHand(agent)) {
-    return { machineId: agent.machineId, scope: { id: agentId, handle: agent.handle, name: agent.name }, seat: false };
+    return {
+      machineId: agent.machineId,
+      scope: await agentScopeOn(db, orgId, agentId, agent.machineId ?? ""),
+      seat: false,
+    };
   }
   const machineId = await workspaceHomeId(db, orgId);
   const machine = machineId ? await (await machines()).getMachine(db, orgId, machineId) : null;

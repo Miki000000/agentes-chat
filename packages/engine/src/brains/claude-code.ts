@@ -26,6 +26,7 @@ import { MachineDroppedError, MachineOfflineError, MachinePausedError, pausedMes
 import { addPersonSpend } from "../person-usage";
 import { apiNano } from "../plan-usage";
 import { runnerUpdateWay } from "../runner-update";
+import { worksOnScope } from "../works-on";
 import { computerPrompt, systemWithConversation } from "./prompt";
 import {
   askingPermissions,
@@ -142,6 +143,8 @@ export const agentScopeFromDb =
   (db: Database) =>
   async (turn: BrainTurn): Promise<AgentScope> => {
     const agent = await getAgentCached(db, turn.orgId, turn.agentId);
+    // Working on another agent's computer (ADR 0202): its turn runs as that agent there; its session ids stay its own.
+    if (agent?.worksOnAgentId && agent.machineId) return worksOnScope(db, agent, agent.machineId);
     return { id: turn.agentId, handle: agent?.handle ?? "agent", ...(agent ? { name: agent.name } : {}) };
   };
 

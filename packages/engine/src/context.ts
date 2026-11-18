@@ -17,7 +17,7 @@ import {
 import { isAppLocale, localeInfo } from "@agenteschat/i18n/locale";
 import type { ModelMessage, SystemBlock } from "@agenteschat/providers";
 import { agentStyleLine, agentStyleOf, isAgentStyle } from "./agent-style";
-import type { Agent } from "./agents";
+import { type Agent, getAgentCached } from "./agents";
 import { readerOf, readerOfMessage } from "./agents-dm-reads";
 import type { AiStatusDeps } from "./ai-status";
 import { canTalkTo, NO_PERSON, speakerFor, viaAgent } from "./audience";
@@ -93,6 +93,7 @@ import type { ApprovalsLevel } from "./tools/run-policy";
 import { neutralizeUntrusted, quotedUntrusted, untrustedBlock } from "./untrusted";
 import { waitingOnPerson, waitingOnPersonBlock } from "./waiting";
 import { workBrief } from "./works";
+import { membersOf } from "./works-on";
 import { workspaceMode } from "./workspace-mode";
 
 const {
@@ -709,6 +710,20 @@ export async function buildRunContext(
   // A mission's thread: a compact brief instead of making the agent dig (only there; one lookup above decided).
   const briefing = threadInfo?.missionId ? missionBrief(db, threadInfo.missionId).catch(() => null) : null;
   // Its connected computer's folders (ADR 0036 §8): the absolute paths it may use there, when the machine reports them.
+  // Working on another agent's computer (ADR 0202): whose it is and who else works there, told to the agent.
+  const worksOn = agent.worksOnAgentId
+    ? Promise.all([getAgentCached(db, run.orgId, agent.worksOnAgentId), membersOf(db, run.orgId, agent.worksOnAgentId)])
+        .then(([lead, members]) =>
+          lead
+            ? {
+                name: lead.name,
+                handle: lead.handle,
+                others: members.filter((m) => m.id !== agent.id).map((m) => m.name),
+              }
+            : null,
+        )
+        .catch(() => null)
+    : null;
   const machineAccess = agent.machineId
     ? machineAccessOf(db, run.orgId, agent.id, agent.machineId).catch(() => null)
     : null;
@@ -1288,11 +1303,25 @@ export async function buildRunContext(
     ...(briefing ? await briefing.then((text) => (text ? [{ conversation: true, text }] : [])) : []),
     ...(issueBrief ? [{ conversation: true, text: issueBrief }] : []),
     ...(fileBrief ? [{ conversation: true, text: fileBrief }] : []),
+    ...(worksOn
+      ? await worksOn.then((w) =>
+          w
+            ? [
+                {
+                  text: [
+                    "# Where you work",
+                    `You work on ${w.name}'s computer, in its folder, with what is installed and set up there, the services it runs and the sign-ins it keeps there: all of it is shared with ${[w.name, ...w.others].join(", ")}. What you change there changes it for them, and what they leave there is what you find. You stay yourself everywhere else: your own name, instructions, memory, model and conversations, and your commits carry your name. Git branches under agentes/${w.handle}/ are the folder's.`,
+                  ].join("\n"),
+                },
+              ]
+            : [],
+        )
+      : []),
     ...(machineAccess
-      ? await machineAccess.then((a) =>
+      ? await machineAccess.then(async (a) =>
           a
             ? [
-                { text: machineAccessText(a) },
+                { text: machineAccessText(worksOn ? { ...a, worksOn: (await worksOn) ?? undefined } : a) },
                 // Cursor's, Grok's and Antigravity's sandboxes (ADR 0114, 0142, 0143) and OpenCode's permissions (ADR
                 // 0132) keep its shell out of a folder outside the turn's workspace, so it couldn't use it.
                 ...(a.shared &&
@@ -2229,6 +2258,8 @@ export function heldSecretsText(rows: { name: string; kind: string; path: string
 /** The block about the agent's connected computer: the folders the machine allows it and the tools that are off. */
 export function machineAccessText(a: {
   name: string;
+  /** It works on another agent's computer (ADR 0202): the folder it uses there is that agent's, shared. */
+  worksOn?: { name: string; others: string[] };
   /** The workspace's own computer: nobody there can allow a folder. */
   managed?: boolean;
   folders: string[];
@@ -2242,7 +2273,9 @@ export function machineAccessText(a: {
           .slice(0, 30)
           .map((f) => `- ${f}`)
           .join("\n")}`
-      : "Only your own folder there; no other folders are allowed for you.",
+      : a.worksOn
+        ? `Only the folder you share with ${[a.worksOn.name, ...a.worksOn.others].join(", ")} there; no other folders are allowed for you.`
+        : "Only your own folder there; no other folders are allowed for you.",
     off.length > 0 ? `Turned off on that computer: ${off.join(", ")}.` : "",
     a.managed
       ? `${a.tools.commands ? "You can also read and upload from your home, but not its hidden files and folders. " : ""}Anything else is refused, and nobody can allow more here.`

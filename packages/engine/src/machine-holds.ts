@@ -1,8 +1,15 @@
-import type { MachineReplies, MachineRequest, PubSub, RunnerFrame, RunnerHolds } from "@agenteschat/adapters";
+import type {
+  AgentScope,
+  MachineReplies,
+  MachineRequest,
+  PubSub,
+  RunnerFrame,
+  RunnerHolds,
+} from "@agenteschat/adapters";
 import { and, type Database, desc, eq, gt, inArray, isNotNull, isNull, lte, type SQL, schema } from "@agenteschat/db";
-import { getAgentCached } from "./agents";
 import { recordAudit } from "./audit";
 import { publishOrgEvent } from "./events";
+import { agentScopeOn } from "./works-on";
 
 const { machineHolds } = schema;
 
@@ -60,9 +67,9 @@ type Call = <Op extends "keep.start" | "keep.end">(
 ) => Promise<MachineReplies[Op]>;
 
 /** The hold's agent as requests name it: the computer finds its user by the id, and names a new one after it. */
-async function agentOf(db: Database, row: Pick<HoldRow, "orgId" | "agentId">) {
-  const agent = await getAgentCached(db, row.orgId, row.agentId).catch(() => null);
-  return { id: row.agentId, handle: agent?.handle ?? "agent", ...(agent?.name ? { name: agent.name } : {}) };
+async function agentOf(db: Database, row: Pick<HoldRow, "orgId" | "agentId" | "machineId">) {
+  // An agent working on another's computer holds there as that agent (ADR 0202).
+  return agentScopeOn(db, row.orgId, row.agentId, row.machineId);
 }
 
 /** The apps that show the agent's computer read its holds again (only ids go out). */
@@ -147,6 +154,8 @@ export async function endHold(
 export interface HoldAsk {
   orgId: string;
   agent: { id: string; handle: string };
+  /** What the computer is asked as, when it isn't `agent` (an agent working on another's computer, ADR 0202). */
+  scope?: AgentScope;
   machineId: string;
   /** The agent's live hold to change, by its id (a time's hold has no program to find it by). */
   holdId?: string;
@@ -179,7 +188,7 @@ export async function takeHold(
   const id = same?.id ?? Bun.randomUUIDv7();
   await deps.call(ask.machineId, {
     op: "keep.start",
-    agent: ask.agent,
+    agent: ask.scope ?? ask.agent,
     holdId: id,
     ...(ask.pid !== undefined ? { pid: ask.pid } : {}),
     ...(ask.browser ? { browser: true } : {}),

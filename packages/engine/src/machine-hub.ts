@@ -98,6 +98,7 @@ import {
 import { enqueue } from "./outbox";
 import { isRightHand } from "./right-hand";
 import { assertCanWork, standingRefusal } from "./standing";
+import { assertCanWorkFor } from "./works-on";
 
 const { machines, machineRpc, machineMcpCalls } = schema;
 
@@ -985,17 +986,21 @@ export function createMachineHub(deps: MachineHubDeps) {
   async function outgoing<R extends MachineRequest>(orgId: string | null, request: R): Promise<R> {
     const scope = request.agent;
     if (!scope || !orgId) return request;
+    // A linked member's request names the lead's id (ADR 0202); the member's own row gives the name and commit line,
+    // and the field that says so never goes on the wire.
+    const { member, ...wire } = scope;
     // A read that fails sends nothing: who the id is must be known before it goes out. An id that is no row's
     // (a seat, a shared browser profile's key) is nobody's to look up.
-    const agent = UUID.test(scope.id) ? await getAgentCached(db, orgId, scope.id) : null;
+    const agent = UUID.test(wire.id) ? await getAgentCached(db, orgId, wire.id) : null;
     if (isRightHand(agent) && !isLockedTurn(request)) {
       throw new MachineRequestError("not_allowed", RIGHT_HAND_OWN_ID_MESSAGE);
     }
-    if (!agent) return request;
+    const named = member && UUID.test(member) ? await getAgentCached(db, orgId, member) : agent;
+    if (!named) return member ? { ...request, agent: wire } : request;
     const runs = request.op === "exec" || request.op === "brain.turn" || request.op === "task.start";
-    const line = runs ? await agentCoAuthorLine(db, orgId, agent).catch(() => null) : null;
-    if (scope.name && !line) return request;
-    return { ...request, agent: { ...scope, name: scope.name || agent.name, ...(line ? { coAuthors: [line] } : {}) } };
+    const line = runs ? await agentCoAuthorLine(db, orgId, named).catch(() => null) : null;
+    if (wire.name && !line) return member ? { ...request, agent: wire } : request;
+    return { ...request, agent: { ...wire, name: wire.name || named.name, ...(line ? { coAuthors: [line] } : {}) } };
   }
 
   /** Bridge calls of work already on the machine stop with its workspace (`standing.ts`). */
@@ -1626,7 +1631,7 @@ export function createMachineHub(deps: MachineHubDeps) {
         if (phoneOp && conn.protocol < phonesNeed) throw phonesTooOld(conn.name);
         if (isNewWork(request)) {
           // A workspace on hold or suspended, or a held agent, starts nothing (`standing.ts`).
-          if (conn.orgId) await assertCanWork(db, conn.orgId, request.agent?.id);
+          if (conn.orgId) await assertCanWorkFor(db, conn.orgId, request.agent);
           // Paused (ADR 0036 §6): nothing new starts; the row says until when, in whose time zone.
           if (pauseActive(conn.pause)) {
             const row = await getMachineById(db, machineId);
@@ -1645,7 +1650,7 @@ export function createMachineHub(deps: MachineHubDeps) {
       }
       if (phoneOp && row.protocol < phonesNeed) throw phonesTooOld(row.name);
       if (isNewWork(request)) {
-        await assertCanWork(db, row.orgId, request.agent?.id);
+        await assertCanWorkFor(db, row.orgId, request.agent);
         await assertNotPaused(db, row);
       }
       const named = await outgoing(row.orgId, request);

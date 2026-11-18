@@ -67,6 +67,7 @@ import { SandboxUnavailableError } from "../sandbox";
 import { closedRefusal } from "../standing";
 import { grantedScopeKeys, isAllowed, toolAccess } from "../tools/scopes";
 import type { ToolContext, ToolDefinition, ToolOutput, ToolSource } from "../tools/types";
+import { agentScopeOn } from "../works-on";
 import { getBrowserProfile, runBrowserProfile } from "./profiles";
 import { agentBrowserStatus, browserUnavailableText } from "./status";
 import {
@@ -1899,7 +1900,7 @@ export async function openPageInControl(
       open.machineId,
       {
         op: "browser.act",
-        agent: { id: agentId, handle: agent.handle, ...(agent.name ? { name: agent.name } : {}) },
+        agent: await agentScopeOn(deps.db, orgId, agentId, open.machineId),
         command,
         args,
         timeoutSeconds: OPEN_PAGE_SECONDS,

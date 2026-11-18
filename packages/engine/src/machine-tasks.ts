@@ -1,3 +1,4 @@
+import type { AgentScope } from "@agenteschat/adapters";
 import {
   findPullRequestUrl,
   type MachineReplies,
@@ -231,6 +232,8 @@ export interface StartTaskInput {
   agent: { id: string; handle: string };
   /** The id the computer knows the agent by when it isn't its own: a seat of the right hand (ADR 0175). */
   scopeId?: string | null;
+  /** The whole scope the computer is asked as, when it isn't `agent` (an agent working on another's computer, ADR 0202). */
+  scope?: AgentScope;
   machineId: string;
   /** The runner's protocol (from the machine's last hello): older than 4 can't run tasks. */
   protocol: number;
@@ -473,7 +476,7 @@ export async function launchTask(
         })
       : null;
     const started = await deps.call<"task.start">(input.machineId, {
-      agent: input.scopeId ? { ...input.agent, id: input.scopeId } : input.agent,
+      agent: input.scope ?? (input.scopeId ? { ...input.agent, id: input.scopeId } : input.agent),
       op: "task.start",
       taskId: row.id,
       executor: input.executor,

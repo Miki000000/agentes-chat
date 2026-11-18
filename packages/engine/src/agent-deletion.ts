@@ -14,6 +14,7 @@ import { recordOperatorEvent } from "./operator-events";
 import { refuseRightHand } from "./right-hand";
 import { deleteAgentRoutines, type RoutineDeps } from "./routines";
 import { removeAgentSecrets } from "./secrets";
+import { stopMembersWork } from "./works-on";
 
 const {
   agentBudgetPeriods,
@@ -69,6 +70,7 @@ export async function deleteAgent(deps: AgentDeletionDeps, actorId: string, orgI
     await concludeMission(deps, mission, actorId, true, { outcome: "canceled" }).catch(() => null);
   }
   await deleteAgentRoutines(deps, actorId, orgId, agentId);
+  await stopMembersWork({ db, pubsub: deps.pubsub, hub: deps.hub ?? undefined }, orgId, agentId).catch(() => null);
   await stopOrgWork(
     { db, pubsub: deps.pubsub, hub: deps.hub ?? undefined },
     orgId,
@@ -100,6 +102,7 @@ export async function deleteAgent(deps: AgentDeletionDeps, actorId: string, orgI
         editorUserIds: [],
         editorRoleIds: [],
         machineId: null,
+        worksOnAgentId: null,
         missionCommandApproval: null,
         brain: "model",
         brainModel: null,
@@ -115,6 +118,11 @@ export async function deleteAgent(deps: AgentDeletionDeps, actorId: string, orgI
       .where(and(eq(agents.id, agentId), isNull(agents.deletedAt)))
       .returning({ id: agents.id });
     if (!gone) throw new NotFoundError("Agent not found");
+    // The agents that worked on its computer keep the one they are on, with their own identity again (ADR 0202).
+    await tx
+      .update(agents)
+      .set({ worksOnAgentId: null, updatedAt: now })
+      .where(and(eq(agents.orgId, orgId), eq(agents.worksOnAgentId, agentId)));
     const memory = tx
       .select({ id: contextItems.id })
       .from(contextItems)
