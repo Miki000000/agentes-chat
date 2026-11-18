@@ -270,7 +270,7 @@ describe("setting it (P1, P2, P3)", () => {
       ["itself", () => link(member.id, member.id), ValidationError],
       ["nobody", () => link(member.id, crypto.randomUUID()), NotFoundError],
       ["archived lead", () => link(member.id, archived.id), ValidationError],
-      ["deleted lead", () => link(member.id, gone.id), ValidationError],
+      ["deleted lead", () => link(member.id, gone.id), NotFoundError],
       ...(hand
         ? ([
             ["right hand as lead", () => link(member.id, hand.id), ValidationError],
@@ -693,6 +693,12 @@ describe("the frame for the runner (T3, T10)", () => {
     const again = await account(box.machineId, member.id, "Bia 2");
     expect((await entry())?.accounts).toContain(again);
     expect((await entry())?.account).toBe(mine);
+    // The member's own entry stays in the frame (the runner never takes it for removed) but names no account: its
+    // account is listed under the lead's, so the runner's lent folder can't be reclaimed to the member's uid.
+    const own = (await machineAgents(f.db, f.org.id, box.machineId)).find((a) => a.id === member.id);
+    expect(own).toBeDefined();
+    expect(own?.account).toBeUndefined();
+    expect(own?.accounts).toBeUndefined();
 
     await link(member.id, null);
     expect((await entry())?.accounts ?? []).not.toContain(again);

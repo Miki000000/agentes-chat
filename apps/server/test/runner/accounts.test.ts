@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import * as accountsModule from "../../runner/accounts";
 import {
   accountCodeAad,
   CLAUDE_AUTH_PROTOCOL,
@@ -71,6 +72,9 @@ afterEach(async () => {
   removeDirs(dirs);
 });
 
+const lentUidsOf = (
+  accountsModule as unknown as { lentUids: (f: unknown[], u: Map<string, number>) => Map<string, number> }
+).lentUids;
 const posix = process.platform !== "win32";
 const FAKE = path.join(import.meta.dir, "fake-account-cli.mjs");
 const ORG = "0193dddd-0000-7000-8000-000000000001";
@@ -668,6 +672,41 @@ test.if(posix)("a key sign-in nobody finishes expires and leaves no folder", asy
 });
 
 // ── System mode: folders lent to agents' users ───────────────────────────────
+
+test.if(posix)(
+  "an agent working on another's computer: its account, listed under the lead's entry, stays lent to the lead's uid, and its own entry (no account) takes nothing back",
+  async () => {
+    const calls: [string, number, number][] = [];
+    const chown = async (file: string, uid: number, gid: number) => {
+      calls.push([file, uid, gid]);
+    };
+    const { m, root } = setup({ lending: { chown } });
+    const memberAccount = LOGIN(60);
+    mkdirSync(path.join(root, "claude_code", memberAccount), { recursive: true });
+    writeFileSync(path.join(root, "claude_code", memberAccount, "signed-in"), "");
+    const LEAD = 21001;
+    const MEMBER = 21002;
+    // The lead's turn lends the member's account to the lead's user (requests carry the lead's id).
+    expect(await m.lendTo("claude_code", memberAccount, LEAD)).toBe(true);
+    const uids = new Map([
+      ["lead-id", LEAD],
+      ["member-id", MEMBER],
+    ]);
+    const frame = [
+      { id: "lead-id", handle: "ada", name: "Ada", accounts: [memberAccount] },
+      { id: "member-id", handle: "bia", name: "Bia" },
+    ];
+    calls.length = 0;
+    await m.keepLent(lentUidsOf(frame, uids));
+    expect(calls).toHaveLength(0);
+    // The clash the frame shape prevents: the member's own entry naming the account maps it to the member's uid, and
+    // the folder lent to the lead's user goes back to root mid-turn.
+    await m.keepLent(
+      lentUidsOf([frame[0] as (typeof frame)[0], { ...frame[1], account: memberAccount } as never], uids),
+    );
+    expect(calls.some((c) => c[1] === 0)).toBe(true);
+  },
+);
 
 test.if(posix)(
   "system mode: a folder goes to the agent's user bottom-up and back to root top-down, never through a link, and root runs no CLI there again",
