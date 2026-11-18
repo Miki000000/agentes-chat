@@ -48,7 +48,7 @@ import { runnerUpdateWay } from "./runner-update";
 import { replyThreadOf } from "./runs";
 import { hopLimitReached, runStretchOf } from "./stretch";
 import type { ToolContext } from "./tools/types";
-import { resolveForRow } from "./works-on";
+import { leadScopeFromLink, resolveForRow } from "./works-on";
 
 const { machineTasks, agentRuns } = schema;
 
@@ -223,6 +223,16 @@ export interface TaskDeps {
 }
 
 /**
+ * Who the computer is asked as when a task starts, resolved now (never saved with a queued start): a seat, the lead
+ * of a member whose link is honored on that computer, or the agent. A link no longer honored refuses the start (ADR 0202).
+ */
+async function startScopeOf(db: Database, input: Pick<QueuedTaskStart, "orgId" | "agent" | "scopeId" | "machineId">) {
+  if (input.scopeId) return { ...input.agent, id: input.scopeId };
+  const agent = await getAgentCached(db, input.orgId, input.agent.id);
+  return agent?.worksOnAgentId ? resolveForRow(db, agent, input.machineId) : input.agent;
+}
+
+/**
  * The agent as a task's computer knows it: the seat its task runs in (`scopeId`), the lead for a member's task (ADR
  * 0202: its row has no seat), or the agent. Asking after a member's task (stop, status, output) must reach the
  * computer even when the link is no longer honored, so then the lead's id comes from the link itself.
@@ -238,8 +248,7 @@ export async function taskScopeOf(
   try {
     return await resolveForRow(db, agent, task.machineId);
   } catch {
-    const lead = await getAgentCached(db, task.orgId, agent.worksOnAgentId).catch(() => null);
-    return lead ? { id: lead.id, handle: lead.handle } : { id: task.agentId, handle };
+    return (await leadScopeFromLink(db, task.orgId, agent)) ?? { id: task.agentId, handle };
   }
 }
 
@@ -248,8 +257,6 @@ export interface StartTaskInput {
   agent: { id: string; handle: string };
   /** The id the computer knows the agent by when it isn't its own: a seat of the right hand (ADR 0175). */
   scopeId?: string | null;
-  /** The whole scope the computer is asked as, when it isn't `agent` (an agent working on another's computer, ADR 0202). */
-  scope?: AgentScope;
   machineId: string;
   /** The runner's protocol (from the machine's last hello): older than 4 can't run tasks. */
   protocol: number;
@@ -492,7 +499,7 @@ export async function launchTask(
         })
       : null;
     const started = await deps.call<"task.start">(input.machineId, {
-      agent: input.scope ?? (input.scopeId ? { ...input.agent, id: input.scopeId } : input.agent),
+      agent: await startScopeOf(deps.db, input),
       op: "task.start",
       taskId: row.id,
       executor: input.executor,
@@ -930,15 +937,17 @@ export async function settleInterruptedTask(
     const asked = claimed.startedAt ? null : claimed.prompt;
     const shell = claimed.executor === "shell";
     try {
-      // A member's task has no seat: it starts as the lead's scope again, and not at all (the agent hears it was
-      // interrupted) when the link is no longer honored there.
-      const own = claimed.scopeId ? null : await getAgentCached(deps.db, claimed.orgId, claimed.agentId);
-      const scope = own?.worksOnAgentId ? await resolveForRow(deps.db, own, claimed.machineId) : undefined;
+      // A member whose link isn't honored there starts nothing: refused before a row is made (ADR 0202).
+      await startScopeOf(deps.db, {
+        orgId: claimed.orgId,
+        agent: { id: claimed.agentId, handle: handle ?? "agent" },
+        scopeId: claimed.scopeId,
+        machineId: claimed.machineId,
+      });
       const again = {
         orgId: claimed.orgId,
         agent: { id: claimed.agentId, handle: handle ?? "agent" },
         scopeId: claimed.scopeId,
-        ...(scope ? { scope } : {}),
         machineId: claimed.machineId,
         protocol: machine.protocol,
         machineName: machine.name,

@@ -93,13 +93,16 @@ export async function machineGitSetup(
 ): Promise<(Pick<GitSyncRequest, "proxy" | "author"> & { agent: AgentScope }) | null> {
   const connection = (await activeConnections(deps.db, orgId)).find((c) => c.connector === "github");
   if (!connection) return null;
-  const keys = await grantedScopeKeys(deps.db, orgId, agentId);
-  if (!gitAccess(keys, connection.id).read) return null;
-  const agent = await getAgentCached(deps.db, orgId, agentId);
+  const own = await getAgentCached(deps.db, orgId, agentId);
   // Without a scope (a brain's turn) the right hand has no checkout: its locked turn prepares none (ADR 0137 §4).
-  if (!agent || (scope ? await toolMachineId(deps.db, agent) : agent.machineId) !== machineId) return null;
-  // A member works in its lead's folder there (ADR 0202): the checkouts it syncs and is told about are the lead's.
-  scope ??= agent.worksOnAgentId ? await resolveForRow(deps.db, agent, machineId) : undefined;
+  if (!own || (scope ? await toolMachineId(deps.db, own) : own.machineId) !== machineId) return null;
+  // A member works in its lead's folder there, and the lead owns git and GitHub (ADR 0202): its grants, token and
+  // author are the lead's, so the checkouts it syncs and the branches it pushes are the lead's.
+  scope ??= own.worksOnAgentId ? await resolveForRow(deps.db, own, machineId) : undefined;
+  const agent = scope?.member ? await getAgentCached(deps.db, orgId, scope.id) : own;
+  if (!agent) return null;
+  const keys = await grantedScopeKeys(deps.db, orgId, agent.id);
+  if (!gitAccess(keys, connection.id).read) return null;
   const [machine] = await deps.db
     .select({ tokenHash: schema.machines.tokenHash })
     .from(schema.machines)
@@ -108,7 +111,7 @@ export async function machineGitSetup(
   const now = deps.now?.() ?? new Date();
   const token = issueGitToken(deps.git.secret, {
     orgId,
-    agentId,
+    agentId: agent.id,
     sandboxId: machineId,
     gen: machineGitGen(machine.tokenHash),
     exp: Math.floor(now.getTime() / 1000) + GIT_TOKEN_TTL_SECONDS,
@@ -363,7 +366,7 @@ export async function prepareAgentCode(
       return null;
     }
     const credit = await creditLine(deps, turn);
-    const list = await agentRepositoryList(deps.db, turn.orgId, turn.agentId);
+    const list = await agentRepositoryList(deps.db, turn.orgId, agent.id);
     const explicit = list.filter((r) => !r.endsWith("/*"));
     // An `owner/*` (or all) grant names no repository: its checkouts are found on the computer, so they fetch
     // straight from GitHub too instead of going back to the proxy.
@@ -379,7 +382,7 @@ export async function prepareAgentCode(
     );
     // Fresh each turn (GitHub's tokens last an hour; cached until a few minutes before), so the agent's own
     // `git fetch` keeps working between syncs.
-    const tokens = await directFetchTokens(deps, { ...turn, machineId }, status.protocol, repos);
+    const tokens = await directFetchTokens(deps, { ...turn, agentId: agent.id, machineId }, status.protocol, repos);
     const reply = await sync(
       repos.map((repo) => {
         const github = tokens.get(repo);
@@ -417,10 +420,9 @@ export async function prepareAgentCode(
       ...(r.defaultBranch ? { defaultBranch: r.defaultBranch } : {}),
       ...(r.status === "failed" ? { stale: r.message || "the update failed" } : {}),
     }));
-    // Its own branches (the proxy lets an agent push only to its own handle's), in the folder of the lead when it works there.
-    const own = await getAgentCached(deps.db, turn.orgId, turn.agentId);
+    // A member's checkouts and branches are the lead's (ADR 0202): the prompt names the lead's handle and folder.
     const prompt = codePrompt({
-      handle: own?.handle ?? agent.handle,
+      handle: agent.handle,
       checkouts,
       notCloned,
       downloading,

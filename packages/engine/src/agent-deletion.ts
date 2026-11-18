@@ -70,7 +70,7 @@ export async function deleteAgent(deps: AgentDeletionDeps, actorId: string, orgI
     await concludeMission(deps, mission, actorId, true, { outcome: "canceled" }).catch(() => null);
   }
   await deleteAgentRoutines(deps, actorId, orgId, agentId);
-  await stopMembersWork({ db, pubsub: deps.pubsub, hub: deps.hub ?? undefined }, orgId, agentId).catch(() => null);
+  await stopMembersWork({ db, pubsub: deps.pubsub }, orgId, agentId).catch(() => null);
   await stopOrgWork(
     { db, pubsub: deps.pubsub, hub: deps.hub ?? undefined },
     orgId,

@@ -1463,7 +1463,6 @@ export function createSandboxToolSource(
                   orgId: ctx.orgId,
                   agent: { id: ctx.agentId, handle: agent?.handle ?? "agent" },
                   scopeId: seatIdOf(ctx, taskScope),
-                  ...(taskScope.member ? { scope: taskScope } : {}),
                   machineId: computer.machineId,
                   protocol: status?.protocol ?? 0,
                   machineName: status?.name ?? info.name,

@@ -22,7 +22,6 @@ import {
   parseRunnerFrame,
 } from "@agenteschat/adapters/machine-protocol";
 import { sealSecret } from "@agenteschat/adapters/secret-box";
-import * as accountsModule from "../../runner/accounts";
 import {
   AccountManager,
   type AccountManagerOptions,
@@ -35,6 +34,7 @@ import {
   grantOf,
   grokAuthOf,
   lentAccounts,
+  lentUids,
   parseClaudeLoginUrl,
   parseClaudeStatus,
   parseCodexLogin,
@@ -72,9 +72,6 @@ afterEach(async () => {
   removeDirs(dirs);
 });
 
-const lentUidsOf = (
-  accountsModule as unknown as { lentUids: (f: unknown[], u: Map<string, number>) => Map<string, number> }
-).lentUids;
 const posix = process.platform !== "win32";
 const FAKE = path.join(import.meta.dir, "fake-account-cli.mjs");
 const ORG = "0193dddd-0000-7000-8000-000000000001";
@@ -697,13 +694,11 @@ test.if(posix)(
       { id: "member-id", handle: "bia", name: "Bia" },
     ];
     calls.length = 0;
-    await m.keepLent(lentUidsOf(frame, uids));
+    await m.keepLent(lentUids(frame, uids));
     expect(calls).toHaveLength(0);
     // The clash the frame shape prevents: the member's own entry naming the account maps it to the member's uid, and
     // the folder lent to the lead's user goes back to root mid-turn.
-    await m.keepLent(
-      lentUidsOf([frame[0] as (typeof frame)[0], { ...frame[1], account: memberAccount } as never], uids),
-    );
+    await m.keepLent(lentUids([frame[0] as (typeof frame)[0], { ...frame[1], account: memberAccount } as never], uids));
     expect(calls.some((c) => c[1] === 0)).toBe(true);
   },
 );

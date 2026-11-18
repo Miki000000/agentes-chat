@@ -71,6 +71,7 @@ import {
   setAgentBrain,
   setReportsTo,
   speakerOf,
+  stopMembersWork,
   summaryModelReady,
   TEAM_TEMPLATES,
   unarchiveAgent,
@@ -1704,15 +1705,8 @@ export function agentRoutes(deps: AppDeps) {
         await deleteAgent({ db, pubsub: adapters.pubsub, hub, mail: adapters.mail }, actor, orgId, agentId);
         return c.body(null, 204);
       }
-      await archiveAgent(
-        db,
-        actor,
-        orgId,
-        agentId,
-        adapters.pubsub,
-        false,
-        deps.extras?.sandbox?.machines?.hub ?? null,
-      );
+      await archiveAgent(db, actor, orgId, agentId, adapters.pubsub);
+      await stopMembersWork({ db, pubsub: adapters.pubsub }, orgId, agentId).catch(() => null);
       await publishMachineAgentsChanged(adapters.pubsub, orgId);
       return c.body(null, 204);
     },

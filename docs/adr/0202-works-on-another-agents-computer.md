@@ -42,8 +42,16 @@ How it works:
   hand, and M, L and the computer the request goes to are the same one. Otherwise the request is refused, naming L, and
   never runs as M's own user. L's hold refuses M's work and says whose it is; M's own hold is its own.
 - The hub (`outgoing()`) takes the `Co-authored-by` line from M's row and removes the member field before the request
-  goes out (`callLocal` strips it for every path, hold reconciliation included): commits carry M's co-author line and
-  L's name as author, no protocol change.
+  goes out (`callLocal` strips it for every path, hold reconciliation included), no protocol change.
+- Git and GitHub are L's (the issue: the lead owns them): M's checkout sync (`machineGitSetup`, `prepareAgentCode`) runs
+  entirely as L, with L's grants, repositories, token and author, and M pushes under `agentes/<L's handle>/`. Commits
+  end with M's `Co-authored-by` line, so who did the work stays visible.
+- When the link changes: work M started under L's scope (running and queued tasks, time holds) ends before the change,
+  through the computer and with the scope it started under (`stopWorkOf`: link set to another agent or cleared, a lead's
+  move; `stopMembersWork`: a lead deleted, and a lead archived, called by every archiving caller after its transaction
+  commits). A queued start keeps no scope: it is resolved when it starts, and a link no longer honored refuses it. A
+  hold taken again at a computer's hello is refused the same way (it ends as restarted); only ending a hold or a task
+  falls back to the lead named by the link, so the computer always finds the user they ran under.
 - Setting it: whoever manages both agents (`managesAgent`, ADR 0085 addendum of 2026-11-17, as `setReportsTo` does) and,
   to put M on L's computer, the setter's computer rule. Same non-null owner, one level (L works on no one; an agent
   with any member, archived ones too, works on no one), never the right hand or an archived agent, and L has a
@@ -78,8 +86,6 @@ lead's computer, and gives M the lead's identity on that computer only: nothing 
 
 - One warm model process per lead's id and runner: a lead and its members alternating turns restart each other's idle
   process (cold start, lost prompt cache). A running turn is never closed for another's. Accepted.
-- M's commits carry L's name as author and M's `Co-authored-by` line. M pushes under `agentes/<its handle>/` (the git
-  proxy knows M by its own token); the branches under `agentes/<lead handle>/` are L's.
 - Rolled back to code without this: the column is ignored. A link left by the newer server is not honored by code that
   does not know it: M works as its own user again with a new folder, files it made in L's folder stay there, and its
   tasks and holds that ran under L's user are not found by M's id (the computer ends them). Going forward to code with

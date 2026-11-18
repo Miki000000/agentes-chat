@@ -1024,7 +1024,7 @@ export function machineAppRoutes(deps: AppDeps) {
       tags,
       security,
       summary:
-        "Works on the computer of another agent (ADR 0202): uses its computer as it does there; null to stop. Who owns or manages both",
+        "Works on the computer of another agent (ADR 0202): uses its computer as it does there; null to stop. Who manages both",
       request: { params: AgentParams, body: body(z.object({ worksOnAgentId: z.uuid().nullable() })) },
       responses: { 200: json(z.object({ worksOnAgentId: z.uuid().nullable() })), ...errors },
     }),

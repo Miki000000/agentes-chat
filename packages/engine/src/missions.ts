@@ -78,7 +78,6 @@ import { runnerUpdateWay } from "./runner-update";
 import type { SearchDeps } from "./search";
 import { autoThreadTitle, createThreadFromRange } from "./threads";
 import { createWikiPage } from "./wiki";
-import { agentScopeOn } from "./works-on";
 
 export { MISSION_LIMITS };
 
@@ -1364,13 +1363,11 @@ export async function startSessionTask(
     throw new ConflictError("The mission's computer was removed", "mission.needs_computer");
   }
   const agent = await getAgentCached(deps.db, mission.orgId, mission.agentId);
-  const scope = await agentScopeOn(deps.db, mission.orgId, mission.agentId, mission.machineId);
   return startMachineTask(
     { db: deps.db, pubsub: deps.pubsub, call: hub.call },
     {
       orgId: mission.orgId,
       agent: { id: mission.agentId, handle: agent?.handle ?? "agent" },
-      ...(scope.member ? { scope } : {}),
       machineId: mission.machineId,
       protocol: status.protocol,
       machineName: status.name,

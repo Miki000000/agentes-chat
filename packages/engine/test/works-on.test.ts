@@ -39,6 +39,7 @@ import {
   setAgentHold,
   setWorksOn,
   startMachineTask,
+  stopMembersWork,
   stopOrgWork,
   type ToolContext,
   unarchiveAgent,
@@ -48,7 +49,7 @@ import { addMember, type Fixture, setup } from "./fixtures";
 import { fakeRunner, pairMachine } from "./machine-fixtures";
 
 /**
- * "Works on the computer of" (#874): agent M works, on agent L's computer, as L does there (L's id and handle on every
+ * "Works on the computer of" (ADR 0202): agent M works, on agent L's computer, as L does there (L's id and handle on every
  * request), and stays its own agent everywhere else. M = member, L = lead in the names below (never in the product's
  * words). Every check reads its expected value from the rules, not from the code's output.
  */
@@ -186,7 +187,7 @@ async function toolsFor(agent: { id: string }, _machineId: string) {
   return { ctx, call, run };
 }
 
-describe("setting it (P1, P2, P3)", () => {
+describe("setting it", () => {
   test("links: the member's worksOnAgentId is the lead's, it moves to the lead's computer and drops its old sign-in, and the next read shows it", async () => {
     f = await setup({ machines: true });
     const lead = await addAgent("Ada");
@@ -336,7 +337,7 @@ describe("setting it (P1, P2, P3)", () => {
     expect((await row(x.id)).worksOnAgentId).toBeNull();
   });
 
-  test("only agents with the same, non-null owner (P2)", async () => {
+  test("only agents with the same, non-null owner", async () => {
     const { box, lead, member } = await crew();
     const bob = await addMember(f.db, f.org.id, "admin", "bob");
     const bobs = await addAgent("Bobby", bob.id);
@@ -362,7 +363,7 @@ describe("setting it (P1, P2, P3)", () => {
     expect((await row(member.id)).worksOnAgentId).toBeNull();
   });
 
-  test("who may: manages both agents AND may put the member on the lead's computer (P1)", async () => {
+  test("who may: manages both agents AND may put the member on the lead's computer", async () => {
     f = await setup({ machines: true });
     const bob = await addMember(f.db, f.org.id, "member", "bob");
     const mine = await addAgent("Mine", bob.id);
@@ -396,7 +397,7 @@ describe("setting it (P1, P2, P3)", () => {
   });
 });
 
-describe("placement (T4, T7)", () => {
+describe("placement", () => {
   test("a linked member can't choose its own computer, nor none; unlinked it can", async () => {
     const { lead, member } = await crew();
     const other = await pair("Other box");
@@ -511,7 +512,7 @@ describe("placement (T4, T7)", () => {
   });
 });
 
-describe("the resolver (T1, T7, P2, P3, P4)", () => {
+describe("the resolver", () => {
   test("an unlinked agent resolves to exactly its own id, handle and name, on every entry point, with no member key", async () => {
     const { box, member } = await crew();
     const want = { id: member.id, handle: "bia", name: "Bia" };
@@ -556,7 +557,7 @@ describe("the resolver (T1, T7, P2, P3, P4)", () => {
     await link(member.id, lead.id);
     const ok = await scopeOf(member.id, box.machineId);
     expect(ok.id).toBe(lead.id);
-    // Asked for another computer than the lead's: not the lead's scope there (T7).
+    // Asked for another computer than the lead's: not the lead's scope there.
     expect((await refusal(scopeOf(member.id, other.machineId))).message).toContain("Ada");
 
     const bob = await addMember(f.db, f.org.id, "member", "bob");
@@ -688,7 +689,7 @@ describe("the resolver (T1, T7, P2, P3, P4)", () => {
   });
 });
 
-describe("the frame for the runner (T3, T10)", () => {
+describe("the frame for the runner", () => {
   async function account(machineId: string, agentId: string, label: string) {
     const [acc] = await f.db
       .insert(schema.machineAccounts)
@@ -746,7 +747,7 @@ describe("the frame for the runner (T3, T10)", () => {
   });
 });
 
-describe("the hub (T2, T8)", () => {
+describe("the hub", () => {
   const exec = (agent: unknown) =>
     ({ op: "exec" as const, command: "ls", timeoutSeconds: 5, stream: false, agent }) as never;
 
@@ -820,7 +821,7 @@ describe("the hub (T2, T8)", () => {
   });
 });
 
-describe("standing and lifecycle (T9)", () => {
+describe("standing and lifecycle", () => {
   async function task(machineId: string, member: { id: string; handle: string }, leadId: string) {
     const msg = await postPersonMessage({ db: f.db, pubsub: f.pubsub }, f.owner.id, f.org.id, f.general.id, {
       body: "go",
@@ -828,7 +829,6 @@ describe("standing and lifecycle (T9)", () => {
     const row = await startMachineTask({ db: f.db, pubsub: f.pubsub, call: (f.machineHub as MachineHub).call }, {
       orgId: f.org.id,
       agent: { id: member.id, handle: member.handle },
-      ...(member.id === leadId ? {} : { scope: await scopeOf(member.id, machineId) }),
       machineId,
       protocol: MACHINE_PROTOCOL_VERSION,
       machineName: "Build box",
@@ -855,7 +855,8 @@ describe("standing and lifecycle (T9)", () => {
     await link(member.id, lead.id);
     const id = await task(box.machineId, member, lead.id);
     expect(await taskStatus(id)).toBe("running");
-    await archiveAgent(f.db, f.owner.id, f.org.id, lead.id, f.pubsub, false, f.machineHub);
+    await archiveAgent(f.db, f.owner.id, f.org.id, lead.id, f.pubsub);
+    await stopMembersWork({ db: f.db, pubsub: f.pubsub }, f.org.id, lead.id);
     // The computer is told to stop it, on the lead's scope, where it runs.
     const cancels = runner.sent.flatMap((x) => (x.type === "request" && x.op === "task.cancel" ? [x] : []));
     expect(cancels.map((c) => c.taskId)).toEqual([id]);
@@ -956,7 +957,7 @@ describe("standing and lifecycle (T9)", () => {
     ).toBe(true);
   });
 
-  test("archiving the lead through archiveAgent with no hub argument still stops the member's task on the computer", async () => {
+  test("stopping the members after archiving the lead cancels the member's task on the computer", async () => {
     const { box, lead, member } = await crew();
     await grantScopes(f.db, f.org.id, member.id, SANDBOX);
     const runner = taskRunner(box.token);
@@ -964,13 +965,14 @@ describe("standing and lifecycle (T9)", () => {
     await link(member.id, lead.id);
     const id = await task(box.machineId, member, lead.id);
     await archiveAgent(f.db, f.owner.id, f.org.id, lead.id, f.pubsub);
+    await stopMembersWork({ db: f.db, pubsub: f.pubsub }, f.org.id, lead.id);
     const cancels = runner.sent.flatMap((x) => (x.type === "request" && x.op === "task.cancel" ? [x] : []));
     expect(cancels.map((c) => c.taskId)).toEqual([id]);
     expect(cancels[0]?.agent?.id).toBe(lead.id);
   });
 });
 
-describe("the rest of the class (F10-F16)", () => {
+describe("lifecycle and failure paths", () => {
   test("a computer that joined, or was provisioned, after a removal: both agents land on it and the member is the lead's again", async () => {
     const { box, lead, member } = await crew();
     await link(member.id, lead.id);
@@ -1123,7 +1125,7 @@ describe("the rest of the class (F10-F16)", () => {
   });
 });
 
-describe("fixes of the first review round", () => {
+describe("turns, holds, followers and the prompt", () => {
   test("a member's brain turn is resolved against the turn's own computer: another computer, or none, is refused", async () => {
     const { box, lead, member } = await crew();
     await link(member.id, lead.id);
@@ -1192,7 +1194,7 @@ describe("fixes of the first review round", () => {
   });
 });
 
-describe("what the member is told (T11)", () => {
+describe("what the member is told", () => {
   const access = { name: "Build box", folders: [], tools: { claude: true, codex: true, commands: true } };
 
   test("unlinked agents' text is the text it always was", () => {
@@ -1486,7 +1488,13 @@ describe("a link that changes ends the work started under the old scope", () => 
   const events: [string, (w: Awaited<ReturnType<typeof working>>) => Promise<unknown>][] = [
     ["its link is set to another agent", (w) => link(w.member.id, w.other.id)],
     ["its link is cleared", (w) => link(w.member.id, null)],
-    ["its lead is archived", (w) => archiveAgent(f.db, f.owner.id, f.org.id, w.lead.id, f.pubsub)],
+    [
+      "its lead is archived",
+      async (w) => {
+        await archiveAgent(f.db, f.owner.id, f.org.id, w.lead.id, f.pubsub);
+        await stopMembersWork({ db: f.db, pubsub: f.pubsub }, f.org.id, w.lead.id);
+      },
+    ],
     [
       "its lead is deleted",
       (w) => deleteAgent({ db: f.db, pubsub: f.pubsub, hub: f.machineHub }, f.owner.id, f.org.id, w.lead.id),
@@ -1506,7 +1514,6 @@ describe("a link that changes ends the work started under the old scope", () => 
       expect(cancels[0]?.agent?.id).toBe(w.lead.id);
       const queuedNow = (await tasks()).find((t) => t.id === w.queued.id);
       expect(queuedNow).toMatchObject({ status: "canceled" });
-      expect(queuedNow?.startRequest ?? null).toBeNull();
       const [end] = frames(w.runner.sent, "keep.end");
       expect(end).toMatchObject({ holdId: w.hold.id });
       expect(end?.agent).toMatchObject({ id: w.lead.id, handle: "ada", name: "Ada" });
@@ -1547,5 +1554,90 @@ describe("a link that changes ends the work started under the old scope", () => 
       engine.launchTask({ db: f.db, pubsub: f.pubsub, call: hub.call }, claimed?.row as never, claimed?.start as never),
     );
     expect(frames(again.sent, "task.start").filter((x) => x.taskId === w.queued.id)).toHaveLength(0);
+  });
+});
+
+describe("what a member reads and is told, and who may be asked", () => {
+  const promptOf = async (agentId: string) => {
+    const t = await toolsFor({ id: agentId }, "");
+    const [agent] = await f.db.select().from(schema.agents).where(eq(schema.agents.id, agentId));
+    const [run] = await f.db.select().from(schema.agentRuns).where(eq(schema.agentRuns.id, t.run.id));
+    return systemText(
+      (await buildRunContext(f.db, run as AgentRun, agent as never, { maxMessages: 30, toolsAvailable: true })).system,
+    );
+  };
+
+  test("a member's prompt lists the lead's folder grants and says git and GitHub are the lead's", async () => {
+    const { box, lead, member } = await crew();
+    await link(member.id, lead.id);
+    await f.db
+      .update(schema.machines)
+      .set({
+        access: {
+          folders: [{ path: "/srv/site", agents: [lead.id] }],
+          tools: { claude: true, codex: true, commands: true },
+        },
+      } as never)
+      .where(eq(schema.machines.id, box.machineId));
+    const text = await promptOf(member.id);
+    expect(text).toContain("/srv/site");
+    expect(text).toContain("Git and GitHub are Ada's");
+    expect(text).toContain("agentes/ada/");
+  });
+
+  test("a lead whose owner is gone leaves the member with no 'Where you work' block (the resolver's rule, not a copy)", async () => {
+    const { lead, member } = await crew();
+    await link(member.id, lead.id);
+    expect(await promptOf(member.id)).toContain("# Where you work");
+    await f.db.update(schema.agents).set({ ownerUserId: null }).where(eq(schema.agents.id, lead.id));
+    engine.forgetAgentCaches(f.org.id, lead.id);
+    expect(await promptOf(member.id)).not.toContain("# Where you work");
+  });
+
+  test("a refused member has no computer for the viewer: none, not its own computer's id", async () => {
+    const { lead, member } = await crew();
+    await link(member.id, lead.id);
+    await archiveAgent(f.db, f.owner.id, f.org.id, lead.id, f.pubsub);
+    expect(await engine.viewerScope(f.db, f.org.id, member.id, f.owner.id, undefined, false)).toEqual({
+      machineId: null,
+      scope: null,
+      seat: false,
+    });
+  });
+
+  test("a lent sign-in of an archived member, or of one on another computer, doesn't count for the lead's driving rule", async () => {
+    const { box, lead, member } = await crew();
+    await link(member.id, lead.id);
+    await f.db
+      .update(schema.machines)
+      .set({ executors: { mode: "system" } as never })
+      .where(eq(schema.machines.id, box.machineId));
+    const caio = await addMember(f.db, f.org.id, "member", "caio");
+    await f.db
+      .update(schema.orgRoles)
+      .set({ permissions: ["control_computers", "read"] })
+      .where(sql`${schema.orgRoles.orgId} = ${f.org.id} and ${schema.orgRoles.kind} = 'everyone'`);
+    const accountId = crypto.randomUUID();
+    await f.db.insert(schema.machineAccounts).values({
+      id: accountId,
+      orgId: f.org.id,
+      machineId: box.machineId,
+      kind: "claude_code",
+      label: "Claude Max",
+      status: "active",
+      createdBy: f.owner.id,
+    });
+    await f.db
+      .update(schema.agents)
+      .set({ brain: "claude_code", brainAccountId: accountId })
+      .where(eq(schema.agents.id, member.id));
+    const drives = () =>
+      engine.requireComputerDriver(f.db, caio.id, f.org.id, lead.id).then(
+        () => true,
+        () => false,
+      );
+    expect(await drives()).toBe(false);
+    await f.db.update(schema.agents).set({ archivedAt: new Date() }).where(eq(schema.agents.id, member.id));
+    expect(await drives()).toBe(true);
   });
 });

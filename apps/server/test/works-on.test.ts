@@ -32,7 +32,7 @@ type Listed = {
   machineId?: string | null;
   worksOnAgentId?: string | null;
   worksOn?: { id: string; name: string; handle: string; archived: boolean } | null;
-  crew?: { id: string; name: string; handle: string }[];
+  crew?: { id: string; name: string; handle: string; archived: boolean }[];
 };
 
 async function scene() {
@@ -155,7 +155,7 @@ test("a linked member's own computer is locked (403), its lead's move takes it a
   expect((await target(dev, box.machineId)).status).toBe(200);
 });
 
-test("the computers list shows who works there under the lead", async () => {
+test("the computers list names a lead and its member on their computer, with no link field on its agents", async () => {
   const { dev, nina, api, owner, worksOn } = await scene();
   await worksOn(dev, nina);
   const list = (await (await api(owner, "/machines")).json()) as {

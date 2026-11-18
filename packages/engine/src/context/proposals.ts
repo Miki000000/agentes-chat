@@ -56,6 +56,7 @@ import { userVisibleChannels } from "../search";
 import {
   agentApps,
   applySettings,
+  archives,
   deletes,
   maySettle,
   type ReceiptLine,
@@ -70,6 +71,7 @@ import {
 import { editedByAgents, pinBlobs, runsCode, skillFolderFiles, writeSkillBody, writeSkillChange } from "../skills";
 import { ALL_TOOLS } from "../tools/scopes";
 import type { ToolContext } from "../tools/types";
+import { stopMembersWork } from "../works-on";
 import {
   type ContextItem,
   checkContent,
@@ -646,6 +648,10 @@ export async function decideProposal(
         .where(eq(contextProposals.id, decided.id));
       throw error;
     }
+  }
+  // An archive applied by the decision (inside its transaction): the work of the agents on its computer stops now.
+  if (decided.status === "accepted" && decided.agentId && archives(decided)) {
+    await stopMembersWork({ db, pubsub: options.pubsub }, orgId, decided.agentId).catch(() => null);
   }
   if (decided.agentId) caches.agents.delete(`${orgId}:${decided.agentId}`);
   caches.orgs.delete(`${orgId}:`);

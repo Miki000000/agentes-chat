@@ -306,6 +306,9 @@ async function setValue(
 
 /** A row that deletes its agent for good (ADR 0082's rules, applied as whoever clicks). */
 export const deletes = (p: Pick<Proposal, "settings">) => (p.settings ?? []).some((l) => l.field === "delete");
+/** Whether the proposal archives the agent (not the one that brings it back). */
+export const archives = (p: Pick<Proposal, "settings">) =>
+  (p.settings ?? []).some((l) => l.field === "archive" && l.to === true);
 
 /** The row's group (all its lines share one). */
 export const settingsGroup = (p: Pick<Proposal, "settings">) => SETTING_GROUP[p.settings?.[0]?.field ?? "model"];

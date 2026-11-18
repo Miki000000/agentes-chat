@@ -93,7 +93,7 @@ import type { ApprovalsLevel } from "./tools/run-policy";
 import { neutralizeUntrusted, quotedUntrusted, untrustedBlock } from "./untrusted";
 import { waitingOnPerson, waitingOnPersonBlock } from "./waiting";
 import { workBrief } from "./works";
-import { membersOf } from "./works-on";
+import { membersOf, resolveForRow } from "./works-on";
 import { workspaceMode } from "./workspace-mode";
 
 const {
@@ -713,19 +713,13 @@ export async function buildRunContext(
   // Working on another agent's computer (ADR 0202): whose it is and who else works there, told to the agent.
   const worksOn =
     agent.worksOnAgentId && agent.machineId
-      ? Promise.all([
-          getAgentCached(db, run.orgId, agent.worksOnAgentId),
-          membersOf(db, run.orgId, agent.worksOnAgentId),
-        ])
-          .then(([lead, members]) =>
-            lead && !lead.archivedAt && lead.machineId === agent.machineId && lead.ownerUserId === agent.ownerUserId
-              ? {
-                  name: lead.name,
-                  handle: lead.handle,
-                  others: members.filter((m) => m.id !== agent.id).map((m) => m.name),
-                }
-              : null,
-          )
+      ? Promise.all([resolveForRow(db, agent, agent.machineId), membersOf(db, run.orgId, agent.worksOnAgentId)])
+          .then(([scope, members]) => ({
+            name: scope.name ?? scope.handle,
+            handle: scope.handle,
+            others: members.filter((m) => m.id !== agent.id).map((m) => m.name),
+          }))
+          // A link that isn't honored here (the resolver refuses) says nothing: the agent is told it can't work there.
           .catch(() => null)
       : null;
   const machineAccess = agent.machineId
@@ -1314,7 +1308,7 @@ export async function buildRunContext(
                 {
                   text: [
                     "# Where you work",
-                    `You work on ${w.name}'s computer, in its folder, with what is installed and set up there, the services it runs and the sign-ins it keeps there: all of it is shared with ${[w.name, ...w.others].join(", ")}. What you change there changes it for them, and what they leave there is what you find. You stay yourself everywhere else: your own name, instructions, memory, model and conversations, and your commits carry your name. Push your own branches under agentes/<your handle>/ (the proxy lets an agent push only there); the ones under agentes/${w.handle}/ are ${w.name}'s.`,
+                    `You work on ${w.name}'s computer, in its folder, with what is installed and set up there, the services it runs and the sign-ins it keeps there: all of it is shared with ${[w.name, ...w.others].join(", ")}. What you change there changes it for them, and what they leave there is what you find. You stay yourself everywhere else: your own name, instructions, memory, model and conversations, and your commits carry your name. Git and GitHub are ${w.name}'s: your checkouts and pushes run as ${w.name}, on branches under agentes/${w.handle}/.`,
                   ].join("\n"),
                 },
               ]

@@ -630,10 +630,10 @@ export const Agent = z
         description: "The agent it works on, in the list only.",
       }),
     crew: z
-      .array(z.object({ id: z.uuid(), name: z.string(), handle: z.string() }))
+      .array(z.object({ id: z.uuid(), name: z.string(), handle: z.string(), archived: z.boolean() }))
       .optional()
       .openapi({
-        description: "The live agents that work on this one's computer, in the list only.",
+        description: "Every agent linked to this one, archived ones included, in the list only.",
       }),
     brakes: AgentBrakes,
     setup: AgentSetupChecklist.nullable().openapi({

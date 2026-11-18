@@ -327,7 +327,7 @@ describe("git on a connected machine through the proxy (ADR 0024 addendum)", () 
     ).toBeNull();
   });
 
-  test("a member's checkouts are updated in the lead's folder: the lead's scope on the computer, the member's own branches, the folder named", async () => {
+  test("a member's checkouts are updated in the lead's folder: the lead's scope, grants, author and branches, the folder named", async () => {
     const w = await world();
     const deps = { db: f.db, pubsub: f.pubsub, publicUrl: PUBLIC_URL };
     const lead = await createAgent(
@@ -340,7 +340,16 @@ describe("git on a connected machine through the proxy (ADR 0024 addendum)", () 
     await f.db.update(schema.agents).set({ ownerUserId: f.owner.id }).where(eq(schema.agents.id, f.agent.id));
     await setAgentComputerTarget(deps, f.owner.id, f.org.id, lead.id, w.paired.machineId);
     await setWorksOn(deps, f.owner.id, f.org.id, f.agent.id, lead.id);
-    await setAgentRepositories(f.db, f.owner.id, f.org.id, f.agent.id, ["acme/app"]);
+    // The lead owns git and GitHub (ADR 0202): its grants and repositories decide, the member's alone give nothing.
+    await setAgentScopes(
+      f.db,
+      f.owner.id,
+      f.org.id,
+      lead.id,
+      [{ connectionId: w.connection.id, scope: "github:git.read" }],
+      connectorGrantValidator,
+    );
+    await setAgentRepositories(f.db, f.owner.id, f.org.id, lead.id, ["acme/app"]);
     w.answers.fn = (req) =>
       req.repos.map((r) => ({
         repo: r.repo,
@@ -361,8 +370,9 @@ describe("git on a connected machine through the proxy (ADR 0024 addendum)", () 
     expect(syncs.length).toBeGreaterThan(0);
     for (const sync of syncs) expect(sync.agent).toMatchObject({ id: lead.id, handle: "ada" });
     expect(JSON.stringify(syncs)).not.toContain(f.agent.id);
-    // Its pushes are its own (the proxy checks the agent's handle): the branches carry the member's handle.
-    expect(out?.prompt).toContain("agentes/dev/<topic>");
+    // Git is the lead's: its author on the sync, its branches in the prompt.
+    expect(syncs[0]?.author?.name).toContain("Ada");
+    expect(out?.prompt).toContain("agentes/ada/<topic>");
     expect(out?.prompt).toContain("Ada's folder");
   });
 

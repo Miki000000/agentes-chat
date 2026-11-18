@@ -213,6 +213,9 @@ describe("the author's own plan", () => {
     expect(hub.calls).toHaveLength(1);
     expect(hub.calls[0]?.request.agent).toMatchObject({ id: lead.id, handle: "ada" });
     expect(JSON.stringify(hub.calls)).not.toContain(f.agent.id);
+    // The route is run as the lead, but the plan's usage is the member's: it is the one that thinks.
+    const usage = (await f.db.select().from(schema.usageRecords)).find((u) => u.kind === "router");
+    expect(usage?.agentId).toBe(f.agent.id);
   });
 
   test("never for someone else's message: a teammate with no plan of their own gets the rules", async () => {

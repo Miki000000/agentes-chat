@@ -62,7 +62,6 @@ import {
 } from "./tools/scopes";
 import { orgDefaultAgentBudget, resyncBudgetCounter } from "./usage";
 import { resumeBudgetWaits, wakeAgentsBrainWaits } from "./usage-pause";
-import { stopMembersWork } from "./works-on";
 import { workspaceApprovalsLevel } from "./workspace-approvals";
 import { isPersonalWorkspace } from "./workspace-mode";
 
@@ -803,6 +802,10 @@ export function forgetAgentCaches(orgId: string, agentId: string) {
   caches.channelMembers.deletePrefix(`${orgId}:`);
 }
 
+/**
+ * Archives an agent. The agents working on its computer (ADR 0202) stop with it, through the computer, which can't
+ * happen inside a transaction: every caller calls `stopMembersWork` once this has committed.
+ */
 export async function archiveAgent(
   db: Database,
   actorId: string,
@@ -811,8 +814,6 @@ export async function archiveAgent(
   pubsub?: PubSub,
   /** The caller already checked who may (the right hand's Desfazer, ADR 0139: the person it created it for). */
   checked = false,
-  /** The computers' hub: the work of the agents on this one's computer stops there too (ADR 0202). */
-  hub?: Parameters<typeof stopMembersWork>[0]["hub"],
 ) {
   if (!checked) await requireAgentManager(db, actorId, orgId, agentId);
   await refuseRightHand(db, orgId, agentId, "archived");
@@ -835,8 +836,6 @@ export async function archiveAgent(
     // It leaves every task it was on (ADR 0188): an archived agent answers no task's conversation and starts no work.
     const { unassignGone } = await import("./issues");
     await unassignGone({ db, pubsub }, orgId, { type: "agent", id: agentId }).catch(() => null);
-    // The agents working on its computer run under its OS user: they stop with it, and are refused while it is archived.
-    await stopMembersWork({ db, pubsub, hub }, orgId, agentId).catch(() => null);
   }
   // Its channel memberships stay: what runs read of a channel's members leaves it out from now on.
   forgetAgentCaches(orgId, agentId);

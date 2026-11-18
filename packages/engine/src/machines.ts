@@ -407,6 +407,8 @@ async function driveCrew(db: Database, orgId: string, agent: { id: string; works
       id: agents.id,
       ...REACH_COLUMNS,
       account: agents.brainAccountId,
+      machineId: agents.machineId,
+      archivedAt: agents.archivedAt,
     })
     .from(agents)
     .where(
@@ -416,9 +418,13 @@ async function driveCrew(db: Database, orgId: string, agent: { id: string; works
         or(eq(agents.id, leadId), eq(agents.worksOnAgentId, leadId)),
       ),
     );
+  const lead = rows.find((r) => r.id === leadId) ?? null;
   return {
-    lead: agent.worksOnAgentId ? (rows.find((r) => r.id === leadId) ?? null) : null,
-    signIn: rows.some((r) => lentAccount(r) !== null),
+    lead: agent.worksOnAgentId ? lead : null,
+    // A member's sign-in is lent to the lead's user only while it is live and on the lead's computer.
+    signIn: rows.some(
+      (r) => lentAccount(r) !== null && (r.id === leadId || (!r.archivedAt && r.machineId === lead?.machineId)),
+    ),
   };
 }
 
@@ -959,6 +965,13 @@ export async function detachMachine(tx: Executor, machine: Pick<MachineRow, "id"
   const now = new Date();
   // The right hand's shared seat (ADR 0175) goes with the workspace's own computer: another one starts it anew.
   if ((await workspaceHomeId(tx, machine.orgId)) === machine.id) await removeSeat(tx, machine.orgId, SHARED_SEAT);
+  // Locked in id order, as a lead's move locks them: the two never wait on each other's rows.
+  await tx
+    .select({ id: agents.id })
+    .from(agents)
+    .where(and(eq(agents.orgId, machine.orgId), eq(agents.machineId, machine.id)))
+    .orderBy(agents.id)
+    .for("update");
   const rows = await tx
     .update(agents)
     // Its accounts (ADR 0041) stay with it: the agents leave them.
@@ -1098,13 +1111,15 @@ export async function setAgentComputerTarget(
   if (!agent || agent.archivedAt) throw new NotFoundError("Agent not found");
   if (machineId && isRightHand(agent)) throw rightHandPermanent("given a computer");
   // It works on another agent's computer (ADR 0202): it follows that agent, and chooses none of its own.
-  if (agent.worksOnAgentId) {
-    const lead = await getAgent(deps.db, orgId, agent.worksOnAgentId);
+  const refuseLinked = async (db: Database, leadId: string | null) => {
+    if (!leadId) return;
+    const lead = await getAgent(db, orgId, leadId);
     throw new ForbiddenError(
       `${agent.name} works on ${lead?.name ?? "another agent"}'s computer: it moves when ${lead?.name ?? "that agent"} does. Stop that first to give it a computer of its own.`,
       "agent.works_on",
     );
-  }
+  };
+  await refuseLinked(deps.db, agent.worksOnAgentId);
   const admin = managesAgent(agent, actorId, membership);
   const machine = machineId ? await getMachine(deps.db, orgId, machineId) : null;
   if (machineId && !machine) throw new NotFoundError("Computer not found", "machine.not_found");
@@ -1117,13 +1132,21 @@ export async function setAgentComputerTarget(
   if (!admin) mayPutOnComputer(agent, machine, actorId);
   const moved = (machine?.id ?? null) !== agent.machineId;
   // The agents working on its computer (ADR 0202) go with it, in the same step and from the same sign-in.
+  // Their work on the computer it leaves ends first, through the scope it started under.
+  if (moved) {
+    const { stopMembersWork } = await import("./works-on");
+    await stopMembersWork(deps, orgId, agentId);
+  }
   const followers = await deps.db.transaction(async (tx) => {
-    // The row lock `setWorksOn` takes on the lead: a link made meanwhile is seen by the follower update below.
-    await tx
-      .select({ id: agents.id })
+    // The lead's row and its followers', locked in id order (as `detachMachine` does, so they never deadlock): a link
+    // made meanwhile is seen by the follower update below, and one made to this agent meanwhile is refused here.
+    const locked = await tx
+      .select({ id: agents.id, worksOnAgentId: agents.worksOnAgentId })
       .from(agents)
-      .where(and(eq(agents.orgId, orgId), eq(agents.id, agentId)))
+      .where(and(eq(agents.orgId, orgId), or(eq(agents.id, agentId), eq(agents.worksOnAgentId, agentId))))
+      .orderBy(agents.id)
       .for("update");
+    await refuseLinked(tx as unknown as Database, locked.find((r) => r.id === agentId)?.worksOnAgentId ?? null);
     const set = {
       machineId: machine?.id ?? null,
       // An account is a folder on one computer (ADR 0041): another computer starts on its own sign-in.
@@ -1172,19 +1195,11 @@ export async function setAgentComputerTarget(
   await publishMachineAgentsChanged(deps.pubsub, orgId);
   // Later than at once: an account on the new computer is saved next (`setAgentBrain`), and a run claimed between the
   // two would find no sign-in there. That save's wake shares the job's dedupe key, so the job keeps this later time.
-  if (moved && options.wakeWaits !== false) {
+  // Their followers' waiting runs go on whoever moved them (a bulk move wakes only the agents it names).
+  const wake = [...(moved && options.wakeWaits !== false ? [agentId] : []), ...followers.map((m) => m.id)];
+  if (wake.length > 0) {
     const { wakeAgentsBrainWaits } = await import("./usage-pause");
-    await wakeAgentsBrainWaits(deps, orgId, [agentId], { delayMs: TARGET_WAKE_DELAY_MS });
-  }
-  // Their waiting runs go on whoever moved them (a bulk move wakes only the agents it names).
-  if (followers.length > 0) {
-    const { wakeAgentsBrainWaits } = await import("./usage-pause");
-    await wakeAgentsBrainWaits(
-      deps,
-      orgId,
-      followers.map((m) => m.id),
-      { delayMs: TARGET_WAKE_DELAY_MS },
-    );
+    await wakeAgentsBrainWaits(deps, orgId, wake, { delayMs: TARGET_WAKE_DELAY_MS });
   }
   return target;
 }

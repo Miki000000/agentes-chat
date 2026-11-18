@@ -10,7 +10,7 @@ import { and, type Database, desc, eq, gt, inArray, isNotNull, isNull, lte, type
 import { getAgentCached } from "./agents";
 import { recordAudit } from "./audit";
 import { publishOrgEvent } from "./events";
-import { agentScopeOn } from "./works-on";
+import { agentScopeOn, leadScopeFromLink } from "./works-on";
 
 const { machineHolds } = schema;
 
@@ -75,10 +75,33 @@ async function agentOf(db: Database, row: Pick<HoldRow, "orgId" | "agentId" | "m
     return await agentScopeOn(db, row.orgId, row.agentId, row.machineId);
   } catch {
     const own = await getAgentCached(db, row.orgId, row.agentId).catch(() => null);
-    const lead = own?.worksOnAgentId ? await getAgentCached(db, row.orgId, own.worksOnAgentId).catch(() => null) : null;
-    return lead
-      ? { id: lead.id, handle: lead.handle, ...(own?.name ? { name: own.name } : {}) }
-      : { id: row.agentId, handle: own?.handle ?? "agent", ...(own?.name ? { name: own.name } : {}) };
+    return (
+      (own && (await leadScopeFromLink(db, row.orgId, own))) ||
+      ({ id: row.agentId, handle: own?.handle ?? "agent", ...(own?.name ? { name: own.name } : {}) } as AgentScope)
+    );
+  }
+}
+
+/** A hold taken again by a hello: only as who the resolver honors now, so a refused link ends the hold (`restarted`). */
+const retakeScope = (db: Database, row: Pick<HoldRow, "orgId" | "agentId" | "machineId">) =>
+  agentScopeOn(db, row.orgId, row.agentId, row.machineId);
+
+/**
+ * Ends every live hold of `agentId` on its computer and here (its link or lead changed, ADR 0202): the computer is
+ * told under the scope the hold was taken with, and a computer that doesn't answer still ends the row.
+ */
+export async function endHoldsOf(deps: Deps & { call?: Call }, orgId: string, agentId: string) {
+  const live = await deps.db
+    .select()
+    .from(machineHolds)
+    .where(and(eq(machineHolds.orgId, orgId), eq(machineHolds.agentId, agentId), isNull(machineHolds.endedAt)));
+  for (const row of live) {
+    if (deps.call) {
+      await deps
+        .call(row.machineId, { op: "keep.end", agent: await agentOf(deps.db, row), holdId: row.id, stop: true })
+        .catch(() => undefined);
+    }
+    await endHold(deps, row, "restarted");
   }
 }
 
@@ -296,7 +319,7 @@ export async function reconcileHolds(
       try {
         await call(machineId, {
           op: "keep.start",
-          agent: await agentOf(deps.db, row),
+          agent: await retakeScope(deps.db, row),
           holdId: row.id,
           until: row.until.toISOString(),
         });

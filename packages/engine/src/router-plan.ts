@@ -33,6 +33,8 @@ export interface PlanSignIn {
   machineId: string;
   /** The agent it thinks for: the route runs in that agent's folder, as its user. */
   agent: { id: string; handle: string };
+  /** The agent whose usage the route is recorded under: the one it thinks for, never the lead it is run as. */
+  usageAgentId: string;
   /** Its account folder; null: the computer's own Claude Code sign-in. */
   accountId: string | null;
   kind: AccountKind;
@@ -127,6 +129,7 @@ export async function planSignInsOf(
     found.push({
       machineId: r.machineId,
       agent: { id: r.agentId, handle: r.handle },
+      usageAgentId: r.agentId,
       accountId: r.accountId,
       kind: r.kind,
       ownerId: r.ownerId,
@@ -139,6 +142,7 @@ export async function planSignInsOf(
     found.push({
       machineId: r.machineId,
       agent: { id: r.agentId, handle: r.handle },
+      usageAgentId: r.agentId,
       accountId: null,
       kind: "claude_code",
       ownerId: r.ownerId,
@@ -217,7 +221,7 @@ export function createPlanRouterStrategy(deps: {
         const parsed = parseRouterJson(reply.json);
         const usageRecordId = await recordPlanUsage(deps.db, {
           orgId: input.orgId,
-          agentId: s.agent.id,
+          agentId: s.usageAgentId,
           kind: "router",
           provider: s.kind,
           machineId: s.machineId,

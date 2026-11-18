@@ -442,14 +442,9 @@ async function queueItem(deps: MissionDeps, mission: MissionRow, input: ItemInpu
   if (!status || status.orgId !== mission.orgId) {
     throw new ConflictError("The mission's computer was removed", "mission.needs_computer");
   }
-  const scope = await agentScope(deps, mission);
-  // The task is the mission agent's own row; a member's computer sees it as the lead (no seat, ADR 0202).
-  const agent = scope.member
-    ? {
-        id: mission.agentId,
-        handle: (await getAgentCached(deps.db, mission.orgId, mission.agentId))?.handle ?? "agent",
-      }
-    : scope;
+  // Refused here when a member's link isn't honored; the task's own scope is resolved when it starts (ADR 0202).
+  const { handle } = await agentScope(deps, mission);
+  const agent = { id: mission.agentId, handle };
   const git = Boolean(mission.branch);
   const title = input.title.slice(0, 120);
   const row = await queueMachineTask(
@@ -457,7 +452,6 @@ async function queueItem(deps: MissionDeps, mission: MissionRow, input: ItemInpu
     {
       orgId: mission.orgId,
       agent,
-      ...(scope.member ? { scope } : {}),
       machineId: mission.machineId,
       protocol: status.protocol,
       machineName: status.name,

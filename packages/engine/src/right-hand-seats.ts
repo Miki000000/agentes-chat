@@ -473,7 +473,7 @@ export async function viewerScope(
       if (error instanceof ForbiddenError && error.code === WORKS_ON_CODE) return null;
       throw error;
     });
-    return { machineId: agent.machineId, scope, seat: false };
+    return scope ? { machineId: agent.machineId, scope, seat: false } : { machineId: null, scope: null, seat: false };
   }
   const machineId = await workspaceHomeId(db, orgId);
   const machine = machineId ? await (await machines()).getMachine(db, orgId, machineId) : null;
