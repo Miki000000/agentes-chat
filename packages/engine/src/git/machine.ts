@@ -217,7 +217,12 @@ export async function cloneOnMachine(
   const { agent, ...rest } = setup;
   // The lead's grants decide for a member (ADR 0202): its fetch tokens are the setup's agent's, as its sync is.
   const github = (
-    await directFetchTokens(deps, { ...target, agentId: setup.agent.id }, status.protocol, [input.repo])
+    await directFetchTokens(
+      deps,
+      { ...target, agentId: setup.agent.member ? setup.agent.id : target.agentId },
+      status.protocol,
+      [input.repo],
+    )
   ).get(input.repo);
   const reply = await deps.hub.call(
     target.machineId,

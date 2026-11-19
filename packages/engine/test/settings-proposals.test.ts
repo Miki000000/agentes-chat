@@ -574,6 +574,69 @@ describe("archiving an agent whose computer others work on (ADR 0202)", () => {
   const cancelled = (runner: { asked: Record<string, unknown>[] }) =>
     runner.asked.filter((r) => r.op === "task.cancel").map((r) => (r.agent as { id: string }).id);
 
+  async function accountOn(machineId: string, label: string) {
+    const id = crypto.randomUUID();
+    await f.db.insert(schema.machineAccounts).values({
+      id,
+      orgId: f.org.id,
+      machineId,
+      kind: "claude_code",
+      label,
+      status: "active",
+      createdBy: f.owner.id,
+    });
+    return id;
+  }
+
+  test("an AI account on the same computer ends nothing; one on another computer ends the members' work, after the commit, and so does its Redo", async () => {
+    const { runner, task, deps } = await worldWithCrew();
+    const [lead] = await f.db.select().from(schema.agents).where(eq(schema.agents.id, f.agent.id));
+    const sameBox = await accountOn(lead?.machineId as string, "Claude here");
+    const otherBox = await pairMachine(deps, f.owner.id, f.org.id, { name: "Other", exec: true });
+    const there = await accountOn(otherBox.machineId, "Claude there");
+    // Claude Code is installed on both computers.
+    await f.db
+      .update(schema.machines)
+      .set({
+        executors: {
+          mode: "system",
+          claude: { version: "2.1.300", loggedIn: true },
+          detectedAt: new Date().toISOString(),
+        },
+      } as never)
+      .where(eq(schema.machines.orgId, f.org.id));
+    const ctx = await lodiRun(f, f.owner.id, "põe o dev no Claude");
+    const decideLatest = async () => {
+      const { card, rows } = await cardRows(f, f.owner.id);
+      for (const r of rows) await decideProposal(f.db, f.owner.id, f.org.id, r.id, "accept", { pubsub: f.pubsub });
+      return card;
+    };
+    await call(f, ctx, { changes: [{ agent: "@dev", ai_account: "Claude here" }], reason: "plano" });
+    await decideLatest();
+    expect(sameBox).toBeTruthy();
+    expect(cancelled(runner)).toEqual([]);
+    expect((await f.db.select().from(schema.machineTasks).where(eq(schema.machineTasks.id, task.id)))[0]?.status).toBe(
+      "running",
+    );
+    await call(f, ctx, { changes: [{ agent: "@dev", ai_account: "Claude there" }], reason: "plano" });
+    const card = await decideLatest();
+    expect(there).toBeTruthy();
+    expect(cancelled(runner)).toEqual([f.agent.id]);
+    // Undo, the computer back where it was, then Redo: moved again, stopped again.
+    const receipt = ((await actionsFor(f.db, f.org.id, [card.id])).get(card.id) ?? []).find((a) =>
+      (a.params.fields as string[]).includes("ai_account"),
+    );
+    await undoAgentAction({ db: f.db, pubsub: f.pubsub }, f.owner.id, f.org.id, receipt?.id ?? "");
+    await f.db.update(schema.agents).set({ machineId: lead?.machineId }).where(eq(schema.agents.orgId, f.org.id));
+    await f.db
+      .update(schema.machineTasks)
+      .set({ status: "running", endedAt: null, canceledBy: null })
+      .where(eq(schema.machineTasks.id, task.id));
+    runner.asked.length = 0;
+    await redoAgentAction({ db: f.db, pubsub: f.pubsub }, f.owner.id, f.org.id, receipt?.id ?? "");
+    expect(cancelled(runner)).toEqual([f.agent.id]);
+  });
+
   test("accepting an archive, and its Redo, stop the members' work on the computer", async () => {
     const { runner, task } = await worldWithCrew();
     const ctx = await lodiRun(f, f.owner.id, "arquiva o dev");
