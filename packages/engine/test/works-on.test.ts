@@ -1641,3 +1641,170 @@ describe("what a member reads and is told, and who may be asked", () => {
     expect(await drives()).toBe(true);
   });
 });
+
+/** A task or hold remembers the scope it started under; what changes later never re-derives it (ADR 0202). */
+describe("work keeps the scope it started under", () => {
+  const frames = <Op extends MachineRequest["op"]>(sent: ServerFrame[], op: Op) =>
+    sent.flatMap((x) => (x.type === "request" && x.op === op ? [x as Extract<typeof x, { op: Op }>] : []));
+  const startTask = async (box: { machineId: string }, agent: { id: string; handle: string }, title: string) => {
+    const msg = await postPersonMessage({ db: f.db, pubsub: f.pubsub }, f.owner.id, f.org.id, f.general.id, {
+      body: "go",
+    });
+    return startMachineTask({ db: f.db, pubsub: f.pubsub, call: (f.machineHub as MachineHub).call }, {
+      orgId: f.org.id,
+      agent,
+      machineId: box.machineId,
+      protocol: MACHINE_PROTOCOL_VERSION,
+      machineName: "Build box",
+      channelId: f.general.id,
+      threadRootId: msg.id,
+      runId: null,
+      requestedByUserId: f.owner.id,
+      title,
+      executor: "shell",
+      command: "bun dev",
+    } as never);
+  };
+  const newHold = async (agentId: string, machineId: string, runnerScopeId: string | null) =>
+    (
+      await f.db
+        .insert(schema.machineHolds)
+        .values({
+          orgId: f.org.id,
+          agentId,
+          machineId,
+          runnerScopeId,
+          what: "The bot",
+          why: "answers customers",
+          until: new Date(Date.now() + 86_400_000),
+        } as never)
+        .returning()
+    )[0] as typeof schema.machineHolds.$inferSelect;
+
+  test("a link set on an agent that works alone ends its running task, as itself, once the link has committed", async () => {
+    const { box, lead, member } = await crew();
+    const runner = taskRunner(box.token);
+    await runner.hello();
+    const own = await startTask(box, member, "own");
+    await link(member.id, lead.id);
+    const cancels = frames(runner.sent, "task.cancel");
+    expect(cancels.map((c) => c.taskId)).toEqual([own.id]);
+    expect(cancels[0]?.agent?.id).toBe(member.id);
+  });
+
+  test("a link that is refused touches nothing: the running task of the member's old lead is not cancelled", async () => {
+    const { box, lead, member } = await crew();
+    await link(member.id, lead.id);
+    const runner = taskRunner(box.token);
+    await runner.hello();
+    const running = await startTask(box, member, "running");
+    const stranger = await addAgent("Dee", null);
+    await setAgentComputerTarget(deps(), f.owner.id, f.org.id, stranger.id, box.machineId);
+    await refusal(link(member.id, stranger.id));
+    expect(frames(runner.sent, "task.cancel")).toHaveLength(0);
+    expect(
+      (await f.db.select().from(schema.machineTasks).where(eq(schema.machineTasks.id, running.id)))[0]?.status,
+    ).toBe("running");
+  });
+
+  test("a row's stored scope survives the link going: cancel, status text and keep.end still name the lead", async () => {
+    const { box, lead, member } = await crew();
+    await link(member.id, lead.id);
+    const runner = taskRunner(box.token);
+    await runner.hello();
+    const running = await startTask(box, member, "running");
+    const hold = await newHold(member.id, box.machineId, lead.id);
+    await f.db.update(schema.agents).set({ worksOnAgentId: null }).where(eq(schema.agents.id, member.id));
+    engine.forgetAgentCaches(f.org.id, member.id);
+    const row = (await f.db.select().from(schema.machineTasks).where(eq(schema.machineTasks.id, running.id)))[0];
+    expect(row?.runnerScopeId).toBe(lead.id);
+    expect(engine.taskScope(row as never, "bia").id).toBe(lead.id);
+    const hub = f.machineHub as MachineHub;
+    await releaseHold({ db: f.db, call: hub.call as never }, hold, { reason: "stopped_by_person", userId: f.owner.id });
+    expect(frames(runner.sent, "keep.end")[0]?.agent?.id).toBe(lead.id);
+    await engine.cancelOrgTasks({ db: f.db, call: hub.call as never }, f.org.id, "system", member.id);
+    expect(frames(runner.sent, "task.cancel")[0]?.agent?.id).toBe(lead.id);
+  });
+
+  test("a seat's task keeps its seat, and a row from before the column (no stored scope) is the agent's own", async () => {
+    const { box, member } = await crew();
+    const seat = crypto.randomUUID();
+    const base = {
+      orgId: f.org.id,
+      agentId: member.id,
+      machineId: box.machineId,
+      channelId: f.general.id,
+      threadRootId: crypto.randomUUID(),
+      title: "x",
+      executor: "shell",
+      command: "bun dev",
+      status: "running",
+    };
+    const [seated] = await f.db
+      .insert(schema.machineTasks)
+      .values({ ...base, scopeId: seat } as never)
+      .returning();
+    const [legacy] = await f.db
+      .insert(schema.machineTasks)
+      .values(base as never)
+      .returning();
+    expect(engine.taskScope(seated as never, "bia").id).toBe(seat);
+    expect(engine.taskScope(legacy as never, "bia").id).toBe(member.id);
+  });
+
+  test("a lead deleted while the computer won't answer: the members' work still ends here and the links are cleared", async () => {
+    const { box, lead, member } = await crew();
+    await link(member.id, lead.id);
+    const hub = f.machineHub as MachineHub;
+    const conn = hub.open({ send() {}, close() {} });
+    await hub.message(
+      conn,
+      JSON.stringify({ type: "hello", token: box.token, ...RUNNER, protocol: MACHINE_PROTOCOL_VERSION, exec: true }),
+    );
+    const running = await startTask(box, member, "running").catch(() => null);
+    const [row] = running
+      ? [running]
+      : await f.db
+          .insert(schema.machineTasks)
+          .values({
+            orgId: f.org.id,
+            agentId: member.id,
+            runnerScopeId: lead.id,
+            machineId: box.machineId,
+            channelId: f.general.id,
+            threadRootId: crypto.randomUUID(),
+            title: "x",
+            executor: "shell",
+            command: "bun dev",
+            status: "running",
+            startedAt: new Date(),
+          } as never)
+          .returning();
+    const hold = await newHold(member.id, box.machineId, lead.id);
+    await deleteAgent({ db: f.db, pubsub: f.pubsub, hub }, f.owner.id, f.org.id, lead.id);
+    expect((await row(member.id)).worksOnAgentId).toBeNull();
+    expect(
+      (
+        await f.db
+          .select()
+          .from(schema.machineTasks)
+          .where(eq(schema.machineTasks.id, row?.id ?? ""))
+      )[0]?.status,
+    ).toBe("canceled");
+    expect(
+      (await f.db.select().from(schema.machineHolds).where(eq(schema.machineHolds.id, hold.id)))[0]?.endedAt,
+    ).not.toBeNull();
+  });
+
+  test("a lead's move that is told not to stop its members calls no computer", async () => {
+    const { box, lead, member } = await crew();
+    await link(member.id, lead.id);
+    const runner = taskRunner(box.token);
+    await runner.hello();
+    await startTask(box, member, "running");
+    await setAgentComputerTarget(deps(), f.owner.id, f.org.id, lead.id, (await pair("Moved box")).machineId, {
+      stopMembers: false,
+    } as never);
+    expect(frames(runner.sent, "task.cancel")).toHaveLength(0);
+  });
+});
