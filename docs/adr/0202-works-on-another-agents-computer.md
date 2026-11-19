@@ -1,6 +1,6 @@
 # 0202. An agent works on another agent's computer
 
-- Status: Accepted (built). Decided by user instruction and debated defaults, not by an owner decision.
+- Status: Accepted (built; not yet run on a real system-mode computer, see "Before it ships").
 - Date: 2026-11-18
 - Extends: 0137 (the right hand has no one working on it, and its scope is a seat), 0148 (an agent's line, which this
   is not), 0175 (a request carrying an id that is not the agent's own)
@@ -32,7 +32,7 @@ How it works:
 - One rule, `resolveForRow` (`works-on.ts`; `agentScopeOn` for a caller with only an id). Every machine request M
   makes carries L's `id`, `handle` and name (the runner derives the OS user, folder, ports and the commit name from
   them), with M's id beside them server-side only. M's brain turns keep M's own session ids. `machineScope` and
-  `agentScopeFromDb` call it, and so does every place that builds a scope for a computer: folder grants, holds, tasks
+  `agentScopeFromDb` call it, and so does every place that builds a scope for a computer, bar the three listed under Consequences (a phone's device tools, the desktop keep-alive, the cancel path's desktop stop): folder grants, holds, tasks
   (start, stop, status, resume: `scope_id` stays the right hand's seat, ADR 0175; a task's and a hold's
   `runner_scope_id` is the id the computer was asked under when it started, see below), missions (worktree, files, tasks, uploads), the pre-turn checkout sync
   (`prepareAgentCode`), the browser's warm, act, live view, input, restart and keep-alive, a person's view of an
@@ -40,7 +40,7 @@ How it works:
   (`planSignInsOf`).
 - The link is honored only while L is a live agent of the same non-null owner, is not a member itself, is not the right
   hand, and M, L and the computer the request goes to are the same one. Otherwise the request is refused, naming L, and
-  never runs as M's own user. L's hold refuses M's work and says whose it is; M's own hold is its own.
+  never runs as M's own user (the same three exceptions aside). L's hold refuses M's work and says whose it is; M's own hold is its own.
 - The hub (`outgoing()`) takes the `Co-authored-by` line from M's row and removes the member field before the request
   goes out (`callLocal` strips it for every path, hold reconciliation included), no protocol change.
 - Git and GitHub are L's (the issue: the lead owns them): M's checkout sync (`machineGitSetup`, `prepareAgentCode`) runs
@@ -107,5 +107,13 @@ lead's computer, and gives M the lead's identity on that computer only: nothing 
   cancel path's desktop stop (`desktop.ts`, `cancel.ts`: they act on the member's own desktop session, which does not
   exist while it is linked, so they are no-ops). Every other site that builds a scope for a computer goes through
   `resolveForRow`.
-- Not run on a real system-mode computer: the two-agents-one-OS-user path is reasoned from code and the runner's tests.
 - Members per lead are unbounded in this change (one level and the same owner bound the crew).
+
+## Before it ships
+
+Not yet run on a real system-mode computer; the two-agents-one-OS-user path is reasoned from code and the runner's tests.
+To run before release:
+
+- Two linked agents on one system-mode computer, with different AI accounts and alternating turns: the OS user, the
+  folder, the ports, the sign-in lent to the lead's user, and a git push under the lead's handle.
+- The CI `isolation-root` job has no member case; it should get one.
