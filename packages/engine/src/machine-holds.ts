@@ -10,7 +10,7 @@ import { and, type Database, desc, eq, gt, inArray, isNotNull, isNull, lte, type
 import { getAgentCached } from "./agents";
 import { recordAudit } from "./audit";
 import { publishOrgEvent } from "./events";
-import { agentScopeOn, leadScopeFromLink } from "./works-on";
+import { agentScopeOn } from "./works-on";
 
 const { machineHolds } = schema;
 
@@ -67,28 +67,30 @@ type Call = <Op extends "keep.start" | "keep.end">(
   request: Extract<MachineRequest, { op: Op }>,
 ) => Promise<MachineReplies[Op]>;
 
-/** The hold's agent as requests name it: the computer finds its user by the id, and names a new one after it. */
-async function agentOf(db: Database, row: Pick<HoldRow, "orgId" | "agentId" | "machineId">) {
-  // An agent working on another's computer holds there as that agent (ADR 0202). Ending a hold must reach the
-  // computer even when the link is no longer honored (lead archived, moved): then the lead's id from the link is used.
-  try {
-    return await agentScopeOn(db, row.orgId, row.agentId, row.machineId);
-  } catch {
-    const own = await getAgentCached(db, row.orgId, row.agentId).catch(() => null);
-    return (
-      (own && (await leadScopeFromLink(db, row.orgId, own))) ||
-      ({ id: row.agentId, handle: own?.handle ?? "agent", ...(own?.name ? { name: own.name } : {}) } as AgentScope)
-    );
-  }
+/**
+ * The hold's agent as requests name it: the scope it was taken under (`runnerScopeId`, ADR 0202), so ending or taking
+ * it again reaches the user it runs under whatever the link is now. A hold from before the column is the agent's own.
+ */
+async function agentOf(db: Database, row: Pick<HoldRow, "orgId" | "agentId" | "runnerScopeId">) {
+  const id = row.runnerScopeId ?? row.agentId;
+  const named = await getAgentCached(db, row.orgId, id).catch(() => null);
+  const own = named ?? (await getAgentCached(db, row.orgId, row.agentId).catch(() => null));
+  // The name is the hub's to fill, from the row of the id it names (the lead's for a member).
+  return { id, handle: own?.handle ?? "agent" } satisfies AgentScope;
 }
 
-/** A hold taken again by a hello: only as who the resolver honors now, so a refused link ends the hold (`restarted`). */
-const retakeScope = (db: Database, row: Pick<HoldRow, "orgId" | "agentId" | "machineId">) =>
-  agentScopeOn(db, row.orgId, row.agentId, row.machineId);
+/**
+ * A hold taken again by a hello starts new work on the computer, so the resolver decides: refused (the link is no
+ * longer honored), the hold ends as `restarted`; else it is taken again under the scope it was taken with.
+ */
+async function retakeScope(db: Database, row: Pick<HoldRow, "orgId" | "agentId" | "machineId" | "runnerScopeId">) {
+  await agentScopeOn(db, row.orgId, row.agentId, row.machineId);
+  return agentOf(db, row);
+}
 
 /**
- * Ends every live hold of `agentId` on its computer and here (its link or lead changed, ADR 0202): the computer is
- * told under the scope the hold was taken with, and a computer that doesn't answer still ends the row.
+ * Ends every live hold of `agentId` on its computer and here: the computer is told under the scope the hold was taken
+ * with, and a computer that doesn't answer still ends the row.
  */
 export async function endHoldsOf(deps: Deps & { call?: Call }, orgId: string, agentId: string) {
   const live = await deps.db
@@ -233,7 +235,13 @@ export async function takeHold(
     ? await deps.db
         .update(machineHolds)
         // The computer holds it now: an end it heard meanwhile (its old lock's, a time run out) is undone.
-        .set({ ...fields, endedAt: null, endReason: null, endedByUserId: null })
+        .set({
+          ...fields,
+          runnerScopeId: (ask.scope ?? ask.agent).id,
+          endedAt: null,
+          endReason: null,
+          endedByUserId: null,
+        })
         .where(eq(machineHolds.id, same.id))
         .returning()
     : await deps.db
@@ -243,6 +251,7 @@ export async function takeHold(
           id,
           orgId: ask.orgId,
           agentId: ask.agent.id,
+          runnerScopeId: (ask.scope ?? ask.agent).id,
           machineId: ask.machineId,
           pid: ask.pid ?? null,
           browser: ask.browser === true,

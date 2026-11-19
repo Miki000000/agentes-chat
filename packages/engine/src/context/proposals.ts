@@ -56,8 +56,8 @@ import { userVisibleChannels } from "../search";
 import {
   agentApps,
   applySettings,
-  archives,
   deletes,
+  endsMembersWork,
   maySettle,
   type ReceiptLine,
   recordSettingsReceipt,
@@ -649,8 +649,8 @@ export async function decideProposal(
       throw error;
     }
   }
-  // An archive applied by the decision (inside its transaction): the work of the agents on its computer stops now.
-  if (decided.status === "accepted" && decided.agentId && archives(decided)) {
+  // An archive or a move applied by the decision (inside its transaction): the work of the agents on its computer stops now.
+  if (decided.status === "accepted" && decided.agentId && endsMembersWork(decided.settings ?? [])) {
     await stopMembersWork({ db, pubsub: options.pubsub }, orgId, decided.agentId).catch(() => null);
   }
   if (decided.agentId) caches.agents.delete(`${orgId}:${decided.agentId}`);

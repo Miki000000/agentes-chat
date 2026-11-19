@@ -261,7 +261,9 @@ describe("what Lodi creates reaches every open app, after its transaction commit
       startedAt: new Date(),
     } as never);
     await undoTeam({ db: f.db, pubsub: f.pubsub }, f.owner.id, f.org.id, id);
-    expect(asked.filter((r) => r.op === "task.cancel").map((r) => (r.agent as { id: string }).id)).toEqual([lead?.id]);
+    expect(asked.filter((r) => r.op === "task.cancel").map((r) => (r.agent as { id: string }).id)).toEqual([
+      lead?.id as string,
+    ]);
   });
 
   test("create_channel: announced after the run's transaction, with its agents in it", async () => {

@@ -17,7 +17,7 @@ import {
 import { isAppLocale, localeInfo } from "@agenteschat/i18n/locale";
 import type { ModelMessage, SystemBlock } from "@agenteschat/providers";
 import { agentStyleLine, agentStyleOf, isAgentStyle } from "./agent-style";
-import { type Agent, getAgentCached } from "./agents";
+import type { Agent } from "./agents";
 import { readerOf, readerOfMessage } from "./agents-dm-reads";
 import type { AiStatusDeps } from "./ai-status";
 import { canTalkTo, NO_PERSON, speakerFor, viaAgent } from "./audience";

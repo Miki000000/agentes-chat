@@ -443,8 +443,11 @@ async function queueItem(deps: MissionDeps, mission: MissionRow, input: ItemInpu
     throw new ConflictError("The mission's computer was removed", "mission.needs_computer");
   }
   // Refused here when a member's link isn't honored; the task's own scope is resolved when it starts (ADR 0202).
-  const { handle } = await agentScope(deps, mission);
-  const agent = { id: mission.agentId, handle };
+  await agentScope(deps, mission);
+  const agent = {
+    id: mission.agentId,
+    handle: (await getAgentCached(deps.db, mission.orgId, mission.agentId))?.handle ?? "agent",
+  };
   const git = Boolean(mission.branch);
   const title = input.title.slice(0, 120);
   const row = await queueMachineTask(

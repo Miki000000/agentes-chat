@@ -834,7 +834,7 @@ export async function undoTeam(deps: TeamDeps, userId: string, orgId: string, me
   await events.flush();
   // Archived inside the transaction above: the work of the agents on their computers stops once it committed (ADR 0202).
   for (const id of archivedIds)
-    await stopMembersWork({ db: deps.db, pubsub: events.pubsub }, orgId, id).catch(() => null);
+    await stopMembersWork({ db: deps.db, pubsub: deps.pubsub }, orgId, id).catch(() => null);
   const next: TeamProposalCard = { ...card, state: "undone", undoneAt: new Date().toISOString() };
   await writeCard(deps, message, next, "created");
   return { card: next };

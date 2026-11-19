@@ -33,8 +33,8 @@ How it works:
   makes carries L's `id`, `handle` and name (the runner derives the OS user, folder, ports and the commit name from
   them), with M's id beside them server-side only. M's brain turns keep M's own session ids. `machineScope` and
   `agentScopeFromDb` call it, and so does every place that builds a scope for a computer: folder grants, holds, tasks
-  (start, stop, status, resume: a member's task row has no seat, `scope_id` stays the right hand's seat and the lead's
-  scope rides along, `taskScopeOf`), missions (worktree, files, tasks, uploads), the pre-turn checkout sync
+  (start, stop, status, resume: `scope_id` stays the right hand's seat, ADR 0175; a task's and a hold's
+  `runner_scope_id` is the id the computer was asked under when it started, see below), missions (worktree, files, tasks, uploads), the pre-turn checkout sync
   (`prepareAgentCode`), the browser's warm, act, live view, input, restart and keep-alive, a person's view of an
   agent's desktop and browser (`viewerScope`), the handoff's page check, and the plan router's sign-ins
   (`planSignInsOf`).
@@ -46,12 +46,22 @@ How it works:
 - Git and GitHub are L's (the issue: the lead owns them): M's checkout sync (`machineGitSetup`, `prepareAgentCode`) runs
   entirely as L, with L's grants, repositories, token and author, and M pushes under `agentes/<L's handle>/`. Commits
   end with M's `Co-authored-by` line, so who did the work stays visible.
-- When the link changes: work M started under L's scope (running and queued tasks, time holds) ends before the change,
-  through the computer and with the scope it started under (`stopWorkOf`: link set to another agent or cleared, a lead's
-  move; `stopMembersWork`: a lead deleted, and a lead archived, called by every archiving caller after its transaction
-  commits). A queued start keeps no scope: it is resolved when it starts, and a link no longer honored refuses it. A
-  hold taken again at a computer's hello is refused the same way (it ends as restarted); only ending a hold or a task
-  falls back to the lead named by the link, so the computer always finds the user they ran under.
+- Work remembers its scope. Each `machine_tasks` and `machine_holds` row stores `runner_scope_id`: the id its computer
+  was asked under when it started (the agent's own, a seat's, or L's for M). Every later request about the row (stop,
+  status, output, a hold's end) uses that id and never derives it again from the link, so a link or a lead that changes
+  later cannot send a request to the wrong user (`taskScope`, `agentOf` in `machine-holds.ts`). A row from before the
+  column is the seat or the agent itself. The resolver decides only whether NEW work may start: a task's start (a
+  queued one included, which keeps no scope until it starts), a resume, and a hold taken again at a computer's hello
+  are refused when the link is not honored (a hold then ends as restarted).
+- When the link or the lead changes, the work that ran under the old scope ends once the change has committed, through
+  the computer (`stopWorkOf`, which reads the stored scopes): after `setWorksOn` commits a link set, changed or cleared
+  (a refused change touches nothing); after a lead's move (`setAgentComputerTarget`, or the caller that passed
+  `stopMembers: false` because it was inside a transaction: an accepted AI-account proposal and its Undo/Redo, which
+  call `stopMembersWork` after); after a lead's deletion; and after a lead is archived, which every archiving caller
+  does once its transaction has committed: the route, accepted proposals and Undo/Redo of one (`revertSettings`),
+  `undoTeam` and the right hand's Desfazer. `stopMembersWork` selects the agents with live work stored under the lead
+  as well as those linked to it, so it reaches members whose link is already gone. The hub is the one registered by the
+  process (`registerMembersHub`); a computer that does not answer still ends the rows here.
 - Setting it: whoever manages both agents (`managesAgent`, ADR 0085 addendum of 2026-11-17, as `setReportsTo` does) and,
   to put M on L's computer, the setter's computer rule. Same non-null owner, one level (L works on no one; an agent
   with any member, archived ones too, works on no one), never the right hand or an archived agent, and L has a
@@ -86,11 +96,12 @@ lead's computer, and gives M the lead's identity on that computer only: nothing 
 
 - One warm model process per lead's id and runner: a lead and its members alternating turns restart each other's idle
   process (cold start, lost prompt cache). A running turn is never closed for another's. Accepted.
-- Rolled back to code without this: the column is ignored. A link left by the newer server is not honored by code that
-  does not know it: M works as its own user again with a new folder, files it made in L's folder stay there, and its
-  tasks and holds that ran under L's user are not found by M's id (the computer ends them). Going forward to code with
-  this again, a link an old server left behind (M on another computer than L, an owner changed) is refused until a person
-  clears or sets it again.
+- Rolled back to code without this: the columns are ignored. A link left by the newer server is not honored by code that
+  does not know it: M works as its own user again with a new folder, and files it made in L's folder stay there. A time
+  hold M or its lead had is ended by the old server by its hold id, but the tasks M started under L's user are not
+  found by the old server's cancel (it asks by M's id): they keep running under L's user until the computer ends them.
+  That is a rollback limit. Going forward to this code again, a link an old server left behind (M on another computer
+  than L, an owner changed) is refused until a person clears or sets it again.
 - Sites that still name the member's own id, and why: a phone's device tools (`device-tools.ts`: the scope names the run's
   holder for a phone, which is a person's device and not a computer user), the desktop handoff's keep-alive and the
   cancel path's desktop stop (`desktop.ts`, `cancel.ts`: they act on the member's own desktop session, which does not

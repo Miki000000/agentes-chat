@@ -40,7 +40,7 @@ import {
   RECENT_LINES,
   startMachineTask,
   taskModeOf,
-  taskScopeOf,
+  taskScope,
   taskSeconds,
 } from "./machine-tasks";
 import { MachineOfflineError, type MachineRow, shownOnline } from "./machines";
@@ -1811,7 +1811,7 @@ async function cancelMissionTasks(deps: MissionDeps, mission: MissionRow, actorI
       reply =
         deps.hub && !row.startRequest
           ? await deps.hub.call<"task.cancel">(row.machineId, {
-              agent: await taskScopeOf(deps.db, row, agent?.handle ?? "agent"),
+              agent: taskScope(row, agent?.handle ?? "agent"),
               op: "task.cancel",
               taskId: row.id,
             })
@@ -3495,7 +3495,7 @@ export async function getTaskOutput(
       const agent = await getAgentCached(deps.db, orgId, row.agentId);
       const out = await deps.hub.call<"task.output">(
         row.machineId,
-        { op: "task.output", taskId: row.id, tail, agent: await taskScopeOf(deps.db, row, agent?.handle ?? "agent") },
+        { op: "task.output", taskId: row.id, tail, agent: taskScope(row, agent?.handle ?? "agent") },
         { timeoutMs: 15_000 },
       );
       const lines = (Array.isArray(out?.lines) ? out.lines : []).map((l) => String(l).slice(0, 500)).slice(-tail);

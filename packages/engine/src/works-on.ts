@@ -129,8 +129,6 @@ export async function setWorksOn(
     throw new ForbiddenError("Only who manages both agents sets this", WORKS_ON_CODE);
   }
   const machines = await import("./machines");
-  // Work it started under its old lead's scope ends first, through that scope; what starts later resolves anew.
-  if (member.worksOnAgentId && member.worksOnAgentId !== leadId) await stopWorkOf(deps, orgId, [agentId]);
   const changed = await db.transaction(async (tx) => {
     // One at a time per workspace: two people linking in opposite directions must not both pass the depth check.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`works-on:${orgId}`}))`);
@@ -193,6 +191,8 @@ export async function setWorksOn(
     };
   });
   if (!changed) return { worksOnAgentId: leadId };
+  // Whatever it ran under its old scope ends now that the link has committed, through the scope it started with.
+  await stopWorkOf(deps, orgId, [agentId]);
   await recordAudit(db, {
     orgId,
     actor: { type: "person", id: actorId },
@@ -218,58 +218,72 @@ export async function setWorksOn(
   return { worksOnAgentId: leadId };
 }
 
-/**
- * The scope a member's work already on its lead's computer is reached by when the link is no longer honored (a stop,
- * a status, a hold's end): the lead's id from the link, with the lead's name, so the computer finds the user it ran
- * under. Null when there is no link or the lead is gone.
- */
-export async function leadScopeFromLink(db: Database, orgId: string, member: Pick<Row, "worksOnAgentId">) {
-  if (!member.worksOnAgentId) return null;
-  const lead = await getAgentCached(db, orgId, member.worksOnAgentId).catch(() => null);
-  return lead ? ({ id: lead.id, handle: lead.handle, name: lead.name } satisfies AgentScope) : null;
-}
-
 /** The machine hub of this process, set when it is made: every way a member's work is stopped goes through it. */
 interface MembersHub {
   call: (machineId: string, request: never, options?: { timeoutMs?: number }) => Promise<unknown>;
 }
-let registeredHub: MembersHub | null = null;
-export function registerMembersHub(hub: MembersHub | null) {
+let registeredHub: MembersHub | undefined;
+export function registerMembersHub(hub: MembersHub) {
   registeredHub = hub;
 }
 
 /**
- * Ends the computer work of `memberIds` that started under their lead's scope (ADR 0202): running and queued tasks and
- * time holds, through the computer with the scope they started under, so call it BEFORE the link or the lead changes
- * and, for an archive, after it commits (the link stays for an archive, so the old scope still resolves by the link).
+ * Ends the live work of `agentIds` on their computers and here: running and queued tasks and time holds. Each is
+ * stopped under the scope it started with (`runnerScopeId`), so it reaches the right user whatever the link is now.
+ * Call it once the change that made it necessary has committed, never inside a transaction.
  */
-export async function stopWorkOf(deps: { db: Database; pubsub?: PubSub }, orgId: string, memberIds: string[]) {
-  if (memberIds.length === 0) return;
-  for (const id of memberIds) forgetAgentCaches(orgId, id);
+export async function stopWorkOf(deps: { db: Database; pubsub?: PubSub }, orgId: string, agentIds: string[]) {
+  if (agentIds.length === 0) return;
+  for (const id of agentIds) forgetAgentCaches(orgId, id);
   const hub = registeredHub;
   const call = hub
     ? (((machineId: string, request: never) => hub.call(machineId, request, { timeoutMs: 15_000 })) as never)
     : undefined;
   const { cancelOrgTasks } = await import("./machine-tasks");
   const { endHoldsOf } = await import("./machine-holds");
-  for (const id of memberIds) {
+  for (const id of agentIds) {
     await cancelOrgTasks({ db: deps.db, pubsub: deps.pubsub, call }, orgId, "system", id);
     await endHoldsOf({ db: deps.db, pubsub: deps.pubsub, call }, orgId, id);
   }
 }
 
-/** `stopWorkOf` for every agent working on `leadId`'s computer (the lead archived, deleted or moved). */
+/**
+ * `stopWorkOf` for every agent whose work runs under `leadId`'s scope (ADR 0202): those with a live task or hold
+ * stored under it, and those linked to it now (a queued task has no scope yet). The lead's own work is left alone.
+ * Called after an archive, a deletion or a move of the lead has committed.
+ */
 export async function stopMembersWork(deps: { db: Database; pubsub?: PubSub }, orgId: string, leadId: string) {
   forgetAgentCaches(orgId, leadId);
-  const members = await deps.db
-    .select({ id: agents.id })
-    .from(agents)
-    .where(and(eq(agents.orgId, orgId), eq(agents.worksOnAgentId, leadId), ne(agents.id, leadId)));
-  await stopWorkOf(
-    deps,
-    orgId,
-    members.map((m) => m.id),
-  );
+  const { machineTasks, machineHolds } = schema;
+  const [linked, tasks, holds] = await Promise.all([
+    deps.db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.orgId, orgId), eq(agents.worksOnAgentId, leadId))),
+    deps.db
+      .select({ id: machineTasks.agentId })
+      .from(machineTasks)
+      .where(
+        and(
+          eq(machineTasks.orgId, orgId),
+          eq(machineTasks.runnerScopeId, leadId),
+          ne(machineTasks.agentId, leadId),
+          isNull(machineTasks.endedAt),
+        ),
+      ),
+    deps.db
+      .select({ id: machineHolds.agentId })
+      .from(machineHolds)
+      .where(
+        and(
+          eq(machineHolds.orgId, orgId),
+          eq(machineHolds.runnerScopeId, leadId),
+          ne(machineHolds.agentId, leadId),
+          isNull(machineHolds.endedAt),
+        ),
+      ),
+  ]);
+  await stopWorkOf(deps, orgId, [...new Set([...linked, ...tasks, ...holds].map((r) => r.id))]);
 }
 
 /**

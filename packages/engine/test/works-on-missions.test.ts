@@ -183,7 +183,9 @@ describe("a member's mission runs as the lead on the lead's computer", () => {
     expect(r.ops("task.start").length).toBeGreaterThan(1);
     asLead(r.ops("task.start"), lead);
     await stopMission(f.missionDeps, f.owner.id, f.org.id, view.id);
-    asLead(r.ops("task.cancel"), lead);
+    // Its stop reaches the user it started under, by the id stored on the task.
+    expect(r.ops("task.cancel").map((c) => c.agent?.id)).toEqual(r.ops("task.cancel").map(() => lead.id));
+    expect(r.ops("task.cancel").length).toBeGreaterThan(0);
     expect((await f.db.select().from(schema.machineTasks)).every((t) => t.agentId === f.agent.id && !t.scopeId)).toBe(
       true,
     );

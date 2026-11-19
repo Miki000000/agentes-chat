@@ -1366,13 +1366,14 @@ describe("a member's background tasks (no seat; the lead's scope rides along)", 
 });
 
 describe("holds of a member and the wire", () => {
-  const hold = async (memberId: string, machineId: string) =>
+  const hold = async (memberId: string, machineId: string, leadId: string) =>
     (
       await f.db
         .insert(schema.machineHolds)
         .values({
           orgId: f.org.id,
           agentId: memberId,
+          runnerScopeId: leadId,
           machineId,
           what: "The bot",
           why: "answers customers",
@@ -1386,13 +1387,13 @@ describe("holds of a member and the wire", () => {
   test("the computer's hello retakes a member's time hold as the lead's scope, and the member field never goes on the wire", async () => {
     const { box, lead, member } = await crew();
     await link(member.id, lead.id);
-    const row = await hold(member.id, box.machineId);
+    const row = await hold(member.id, box.machineId, lead.id);
     const runner = taskRunner(box.token);
     await runner.hello({ holds: { live: [], ended: [] } });
     for (let i = 0; i < 100 && kept(runner.sent, "keep.start").length === 0; i++) await Bun.sleep(10);
     const [start] = kept(runner.sent, "keep.start");
     expect(start).toMatchObject({ holdId: row.id });
-    expect(start?.agent).toEqual({ id: lead.id, handle: "ada", name: "Ada" });
+    expect(start?.agent).toEqual({ id: lead.id, handle: "ada" });
     const requests = JSON.stringify(runner.sent.filter((x) => x.type === "request"));
     expect(requests).not.toContain('"member"');
     expect(requests).not.toContain(member.id);
@@ -1401,7 +1402,7 @@ describe("holds of a member and the wire", () => {
   test("releasing a hold when the resolver refuses (lead archived) still tells the lead's user, by the link", async () => {
     const { box, lead, member } = await crew();
     await link(member.id, lead.id);
-    const row = await hold(member.id, box.machineId);
+    const row = await hold(member.id, box.machineId, lead.id);
     const hub = f.machineHub as MachineHub;
     const runner = taskRunner(box.token);
     await runner.hello();
@@ -1476,6 +1477,7 @@ describe("a link that changes ends the work started under the old scope", () => 
       .values({
         orgId: f.org.id,
         agentId: member.id,
+        runnerScopeId: lead.id,
         machineId: box.machineId,
         what: "The bot",
         why: "answers customers",
@@ -1516,7 +1518,9 @@ describe("a link that changes ends the work started under the old scope", () => 
       expect(queuedNow).toMatchObject({ status: "canceled" });
       const [end] = frames(w.runner.sent, "keep.end");
       expect(end).toMatchObject({ holdId: w.hold.id });
-      expect(end?.agent).toMatchObject({ id: w.lead.id, handle: "ada", name: "Ada" });
+      expect(end?.agent?.id).toBe(w.lead.id);
+      // A lead deleted has lost its handle: the computer finds its user by the id.
+      if (!name.includes("deleted")) expect(end?.agent).toMatchObject({ handle: "ada", name: "Ada" });
       expect((await holds())[0]?.endedAt).not.toBeNull();
     });
   }
@@ -1541,7 +1545,7 @@ describe("a link that changes ends the work started under the old scope", () => 
     await f.db.update(schema.agents).set({ ownerUserId: null }).where(eq(schema.agents.id, w.lead.id));
     engine.forgetAgentCaches?.(f.org.id, w.lead.id);
     const row = (await tasks()).find((t) => t.id === w.running.id) as NonNullable<Awaited<ReturnType<typeof tasks>>[0]>;
-    expect((await engine.taskScopeOf(f.db, row, "bia")).id).toBe(w.lead.id);
+    expect(engine.taskScope(row, "bia").id).toBe(w.lead.id);
     // The computer says hello holding nothing: the time hold is not taken again as a user nobody honors.
     const again = taskRunner(w.box.token);
     await again.hello({ holds: { live: [], ended: [] } });
@@ -1756,13 +1760,28 @@ describe("work keeps the scope it started under", () => {
     const { box, lead, member } = await crew();
     await link(member.id, lead.id);
     const hub = f.machineHub as MachineHub;
-    const conn = hub.open({ send() {}, close() {} });
+    // A computer that answers every request with a failure: the stop can't reach it.
+    const conn = hub.open({
+      send(text: string) {
+        const frame = JSON.parse(text) as ServerFrame;
+        if (frame.type !== "request") return;
+        setTimeout(
+          () =>
+            void hub.message(
+              conn,
+              JSON.stringify({ type: "result", id: frame.id, ok: false, error: { code: "internal", message: "down" } }),
+            ),
+          1,
+        );
+      },
+      close() {},
+    });
     await hub.message(
       conn,
       JSON.stringify({ type: "hello", token: box.token, ...RUNNER, protocol: MACHINE_PROTOCOL_VERSION, exec: true }),
     );
     const running = await startTask(box, member, "running").catch(() => null);
-    const [row] = running
+    const [stuck] = running
       ? [running]
       : await f.db
           .insert(schema.machineTasks)
@@ -1788,7 +1807,7 @@ describe("work keeps the scope it started under", () => {
         await f.db
           .select()
           .from(schema.machineTasks)
-          .where(eq(schema.machineTasks.id, row?.id ?? ""))
+          .where(eq(schema.machineTasks.id, stuck?.id ?? ""))
       )[0]?.status,
     ).toBe("canceled");
     expect(

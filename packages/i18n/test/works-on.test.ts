@@ -4,7 +4,7 @@ import { LOCALES } from "../src/locale";
 import { flatten } from "./check-locale";
 
 /**
- * "Works on the computer of" (#874): the field's words exist in every language the repo ships (ADR 0122), say plainly
+ * "Works on the computer of" (ADR 0202): the field's words exist in every language the repo ships (ADR 0122), say plainly
  * that on that computer the agent can do what the other one can, and never call the other agent a "lead" (the word
  * is a setor's person, ADR 0083). The phone reads these same strings.
  */

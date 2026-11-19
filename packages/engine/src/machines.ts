@@ -1104,7 +1104,11 @@ export async function setAgentComputerTarget(
   agentId: string,
   machineId: string | null,
   /** false: the caller moves its waiting runs itself (`moveAgentsFromMachine`), or `setAgentBrain` follows. */
-  options: { wakeWaits?: boolean } = {},
+  options: {
+    wakeWaits?: boolean;
+    /** false: the caller is inside a transaction and stops its members' work itself once it commits (`stopMembersWork`). */
+    stopMembers?: boolean;
+  } = {},
 ): Promise<ComputerTarget> {
   const membership = await requirePermission(deps.db, actorId, orgId, "read");
   const agent = await getAgent(deps.db, orgId, agentId);
@@ -1132,11 +1136,6 @@ export async function setAgentComputerTarget(
   if (!admin) mayPutOnComputer(agent, machine, actorId);
   const moved = (machine?.id ?? null) !== agent.machineId;
   // The agents working on its computer (ADR 0202) go with it, in the same step and from the same sign-in.
-  // Their work on the computer it leaves ends first, through the scope it started under.
-  if (moved) {
-    const { stopMembersWork } = await import("./works-on");
-    await stopMembersWork(deps, orgId, agentId);
-  }
   const followers = await deps.db.transaction(async (tx) => {
     // The lead's row and its followers', locked in id order (as `detachMachine` does, so they never deadlock): a link
     // made meanwhile is seen by the follower update below, and one made to this agent meanwhile is refused here.
@@ -1165,6 +1164,11 @@ export async function setAgentComputerTarget(
       .returning({ id: agents.id });
   });
   for (const m of followers) caches.agents.delete(`${orgId}:${m.id}`);
+  // Their work on the computer it left ends, through the scope it started under.
+  if (moved && options.stopMembers !== false) {
+    const { stopMembersWork } = await import("./works-on");
+    await stopMembersWork(deps, orgId, agentId);
+  }
   const followerTarget: ComputerTarget = machine
     ? { kind: "machine", machineId: machine.id, name: machine.name, online: shownOnline(machine) }
     : { kind: "none" };

@@ -1,5 +1,5 @@
 {
-  "id": "f1b24d89-1fc8-448b-8a36-e7100666abfb",
+  "id": "8cc49ed3-a54f-4ddd-9075-4d03fc4ac07c",
   "prevId": "4e315829-cd3d-4f09-b846-1b271f79ad3f",
   "version": "7",
   "dialect": "postgresql",
@@ -18689,6 +18689,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "runner_scope_id": {
+          "name": "runner_scope_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "machine_id": {
           "name": "machine_id",
           "type": "uuid",
@@ -18883,6 +18889,12 @@
         },
         "scope_id": {
           "name": "scope_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runner_scope_id": {
+          "name": "runner_scope_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false

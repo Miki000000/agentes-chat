@@ -3,7 +3,7 @@ import type { Agent, AgentRef, Machine } from "../src/api/types";
 import { type WorksOnAgent, worksOnAgents, worksOnCrewShown, worksOnField } from "../src/lib/works-on";
 
 /**
- * What the "Works on the computer of" field shows for an agent, one rule for web and phone (#874): who is offered
+ * What the "Works on the computer of" field shows for an agent, one rule for web and phone (ADR 0202): who is offered
  * (the rules that depend on the agents alone; who may do it is the server's answer), the locked state of a member, the
  * explicit empty state, and the bounded list on the lead's side.
  */

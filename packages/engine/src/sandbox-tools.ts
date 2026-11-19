@@ -77,7 +77,7 @@ import {
   TaskSignInError,
   taskRequester,
   taskResumesByItself,
-  taskScopeOf,
+  taskScope,
   taskSeconds,
 } from "./machine-tasks";
 import {
@@ -1640,7 +1640,7 @@ export function createSandboxToolSource(
           let reply: { canceled: boolean } | null = null;
           try {
             reply = await hubOf().call<"task.cancel">(row.machineId, {
-              agent: await taskScopeOf(ctx.db, row, agent?.handle ?? "agent"),
+              agent: taskScope(row, agent?.handle ?? "agent"),
               op: "task.cancel",
               taskId: row.id,
             });
