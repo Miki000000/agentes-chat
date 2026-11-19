@@ -4,8 +4,9 @@ import { setupDom } from "@agenteschat/ui/testing/dom";
 setupDom();
 
 import type { Agent, AgentRef } from "@agenteschat/client";
+import { en, ptBR } from "@agenteschat/i18n";
 import { cleanup } from "@testing-library/react";
-import { AgentComputerPanel } from "@/components/AgentComputer";
+import { AgentComputerPanel, AgentComputersCard } from "@/components/AgentComputer";
 import { ATLAS_ID, createFakeApi, fakeMachinesOf, ORG_ID, seedState } from "./fake-api";
 import { renderPage, screen, settle } from "./render";
 
@@ -33,7 +34,9 @@ async function field(adaPatch: Partial<Agent>, withComputer = true) {
 describe("the works-on field", () => {
   test("nobody else has a computer to share: the explicit empty state", async () => {
     const view = await field({}, false);
-    expect(view.getByText("Nenhum agente seu tem um computador para compartilhar.")).toBeTruthy();
+    const words = (ptBR as { worksOn: { noneEligible: string } }).worksOn.noneEligible;
+    expect(words).not.toBe((en as { worksOn: { noneEligible: string } }).worksOn.noneEligible);
+    expect(view.getByText(words)).toBeTruthy();
   });
 
   test("a member of an archived lead: its name comes from worksOn, and stopping is a choice", async () => {
@@ -62,5 +65,19 @@ describe("the works-on field", () => {
     const view = await field({ crew: [ref("old", "Arquivado", true)] });
     expect(view.getByText("Nenhum outro agente trabalha neste computador.")).toBeTruthy();
     expect(view.queryByRole("combobox", { name: /Trabalha no computador de/ })).toBeNull();
+  });
+});
+
+describe("a linked agent whose lead's name is not known", () => {
+  test("the computers list says it follows another agent: no empty name, no 'own computer' note", async () => {
+    const state = seedState();
+    Object.assign(state.agents[0] as Agent, { worksOnAgentId: "gone", worksOn: null });
+    const api = createFakeApi(state);
+    await renderPage(<AgentComputersCard />, { api, org: true });
+    await settle(10);
+    const row = screen().getByText("Ada").closest(".computers-agent, .ac-list__row") as HTMLElement;
+    expect(row.textContent).toContain("Acompanha o computador de outro agente");
+    expect(row.textContent).not.toContain("Acompanha  ");
+    expect(row.textContent).not.toContain("O próprio computador");
   });
 });
